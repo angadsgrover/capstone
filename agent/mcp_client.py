@@ -87,13 +87,13 @@ class MCPServer:
 
     async def initialize(self) -> None:
         """Initialize the server connection."""
-        command = (
-            shutil.which("python")  # Using python instead of npx since we're calling Python MCP servers
-            if self.config["command"] == "npx"
-            else self.config["command"]
-        )
-        if command is None:
-            raise ValueError("The command must be a valid string and cannot be None.")
+        cfg_command = self.config.get("command")
+        if not cfg_command:
+            raise ValueError("The server configuration must include a 'command' field.")
+
+        # Resolve to an absolute path when possible; fall back to the configured value.
+        resolved = shutil.which(cfg_command)
+        command = resolved if resolved is not None else cfg_command
 
         server_params = StdioServerParameters(
             command=command,
