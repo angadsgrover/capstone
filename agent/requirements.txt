@@ -1,0 +1,13 @@
+pydantic-ai>=0.0.41
+pydantic>=2.10.6
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+mcp>=1.5.0
+aiohttp>=3.8.0
+python-dotenv>=1.0.0
+fastmcp>=2.10.2
+rich>=13.9.4
+aviation_weather_mcp_server
+hk_climate_mcp_server
+fastapi=0.128

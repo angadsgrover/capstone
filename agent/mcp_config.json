@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "aviation-weather": {
+      "command": "python3",
+      "args": [
+        "-m",
+        "aviation_weather_mcp_server"
+      ],
+      "env": {
+        "PYTHONPATH": "/Users/angadsgrover/Documents/PolyU/PolyU/Capstone/mcp/aviation-weather-mcp-python"
+      }
+    },
+    "hk-climate": {
+      "command": "python3",
+      "args": [
+        "-m",
+        "hk_climate_mcp_server"
+      ],
+      "env": {
+        "PYTHONPATH": "/Users/angadsgrover/Documents/PolyU/PolyU/Capstone/mcp/hk-climate-mcp-server-python"
+      }
+    }
+  }
+}

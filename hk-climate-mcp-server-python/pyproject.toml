@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hk_climate_mcp_server"
+version = "0.1.0"
+description = "Model Context Protocol server for Hong Kong climate and weather data"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "fastmcp>=2.10.2",
+    "aiohttp>=3.8.0",
+    "pytest>=8.2.0",
+]
+
+[project.urls]
+repository = "https://github.com/hkopenai/hk-climate-mcp-server"
+
+[project.scripts]
+hk-climate-mcp = "hk_climate_mcp_server.__main__:main"
+
+[tool.setuptools]
+packages = ["hk_climate_mcp_server"]
+include-package-data = true
