@@ -1,33 +1,13 @@
 {
   "mcpServers": {
     "aviation-weather": {
-      "command": "/Users/angadsgrover/Documents/PolyU/PolyU/Capstone/capstone/aviation-weather-mcp-python/.venv/bin/python3",
-      "args": [
-        "-m",
-        "aviation_weather_mcp_server"
-      ],
-      "env": {
-        "PYTHONPATH": "/Users/angadsgrover/Documents/PolyU/PolyU/Capstone/capstone/aviation-weather-mcp-python"
-      }
+      "url": "http://localhost:8001/sse"
     },
     "hk-climate": {
-      "command": "/Users/angadsgrover/Documents/PolyU/PolyU/Capstone/capstone/hk-climate-mcp-server-python/.venv/bin/python3",
-      "args": [
-        "-m",
-        "hk_climate_mcp_server"
-      ],
-      "env": {
-        "PYTHONPATH": "/Users/angadsgrover/Documents/PolyU/PolyU/Capstone/capstone/hk-climate-mcp-server-python"
-      }
+      "url": "http://localhost:8002/sse"
     },
     "adsb": {
-      "command": "/Users/angadsgrover/Documents/PolyU/PolyU/Capstone/capstone/adsb_mcp/.venv/bin/python3",
-      "args": [
-        "/Users/angadsgrover/Documents/PolyU/PolyU/Capstone/capstone/adsb_mcp/server.py"
-      ],
-      "env": {
-        "PYTHONPATH": "/Users/angadsgrover/Documents/PolyU/PolyU/Capstone/capstone/adsb_mcp"
-      }
+      "url": "http://localhost:8003/sse"
     }
   }
 }

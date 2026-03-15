@@ -1,207 +1,395 @@
 """
-Simplified weather agent using pydantic-ai and MCP tools.
+LangGraph multi-step agent orchestrator with specialist sub-agents.
+
+Architecture:
+  User Input
+      │
+      ▼
+  router  ──classifies intent──►  aviation_weather │ hk_weather │ aircraft │ general
+                                       │
+                                  create_react_agent (ReAct loop with focused tools)
+                                       │
+                                      END
+
+Context management:
+  Each specialist receives at most MAX_HISTORY_MESSAGES recent messages so the
+  LLM's context window stays within budget across long conversations.
+  Full history is still persisted by MemorySaver for the checkpointer.
+
+Conversation memory: MemorySaver checkpointer keyed by session_id / thread_id.
 """
 import asyncio
 import csv
-from typing import Dict, Any, List
-from rich.markdown import Markdown
-from rich.console import Console
-from rich.live import Live
-from rich.panel import Panel
-from rich.status import Status
-from dotenv import load_dotenv
-import pathlib
-import os
 import json
-# from langgraph import Graph, Node
-# from langgraph.cache import InMemoryCache
-from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
-import mcp_client
-# Get the directory where the current script is located
+import logging
+import os
+import pathlib
+from typing import Annotated, Any, Dict, List, TypedDict
+
+from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import StructuredTool, tool
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import create_react_agent
+
+import mcp_client as mcp_module
+
 SCRIPT_DIR = pathlib.Path(__file__).parent.resolve()
-# Define the path to the config file relative to the script directory
 CONFIG_FILE = SCRIPT_DIR / "mcp_config.json"
 ICAO_MAPPING_FILE = SCRIPT_DIR / "icao_mapping.csv"
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
-def get_model() -> OpenAIChatModel:
-    """Initialize the LLM model based on environment variables."""
-    model_choice = os.getenv('MODEL_CHOICE')
-    base_url = os.getenv('BASE_URL')
-    api_key = os.getenv('LLM_API_KEY')
+# ── Context-length tuning ─────────────────────────────────────────────────────
 
-    # Create provider with custom base URL for OpenRouter compatibility
-    provider = OpenAIProvider(
-        base_url=base_url,
-        api_key=api_key
+# Maximum number of messages passed to each specialist LLM per call.
+# Older messages are silently dropped from the *inference* window; the full
+# history is still stored in the MemorySaver checkpointer.
+MAX_HISTORY_MESSAGES = 20
+
+# Maximum tokens a specialist may generate in a single response.
+MAX_RESPONSE_TOKENS = 2_048
+
+
+# ── State ─────────────────────────────────────────────────────────────────────
+
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]
+    route: str          # set by router node, read by conditional edge
+
+
+# ── LLM factory ───────────────────────────────────────────────────────────────
+
+def get_chat_model(streaming: bool = True, max_tokens: int = MAX_RESPONSE_TOKENS) -> ChatOpenAI:
+    """Return a ChatOpenAI instance pointed at OpenRouter."""
+    return ChatOpenAI(
+        model=os.getenv("MODEL_CHOICE", "openai/gpt-4o-mini"),
+        base_url=os.getenv("BASE_URL", "https://openrouter.ai/api/v1"),
+        api_key=os.getenv("LLM_API_KEY", ""),
+        streaming=streaming,
+        temperature=0,
+        max_tokens=max_tokens,
+        default_headers={"HTTP-Referer": "http://localhost:5173"},
     )
-    
-    return OpenAIChatModel(
-        model_name=model_choice,
-        provider=provider
-    )
 
-def search_airport_by_location(
-    location: str,
-    max_results: int = 10,
-    icao: str = None
-) -> List[Dict[str, str]]:
-    """
-    Search for airports by location name, airport name, or ICAO code.
-    
-    Args:
-        location: Location/airport name/ICAO code to search for (e.g., "Hong Kong", "VHHH", "London")
-        max_results: Maximum number of results to return (default: 10)
-        icao: Optional ICAO code to filter results (if location is a name)
-        
-    Returns:
-        List of dictionaries containing matching airport information
-    """
+
+# ── Local airport-lookup tool ─────────────────────────────────────────────────
+
+def _search_airport(location: str, max_results: int = 10) -> List[Dict[str, str]]:
+    results: List[Dict[str, str]] = []
+    loc_lower = location.lower().strip()
     try:
-        results = []
-        search_input = location.upper().strip()
-        location_lower = location.lower().strip()
-        
-        with open(ICAO_MAPPING_FILE, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if not row.get('icao'):
+        with open(ICAO_MAPPING_FILE, "r", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if not row.get("icao"):
                     continue
-                    
-                # Check if matches ICAO code parameter
-                if icao and row.get('icao', '').upper() == icao.upper():
+                if (
+                    loc_lower in row.get("icao", "").lower()
+                    or loc_lower in row.get("airport", "").lower()
+                    or loc_lower in row.get("region_name", "").lower()
+                    or loc_lower in row.get("country_code", "").lower()
+                    or loc_lower in row.get("iata", "").lower()
+                ):
                     results.append({
-                        'icao': row['icao'],
-                        'iata': row.get('iata', ''),
-                        'airport': row.get('airport', ''),
-                        'region': row.get('region_name', ''),
-                        'country': row.get('country_code', ''),
-                        'latitude': row.get('latitude', ''),
-                        'longitude': row.get('longitude', '')
+                        "icao": row["icao"],
+                        "iata": row.get("iata", ""),
+                        "airport": row.get("airport", ""),
+                        "region": row.get("region_name", ""),
+                        "country": row.get("country_code", ""),
                     })
-                # Check if matches location string (as ICAO, airport name, location, etc.)
-                elif location_lower in row.get('icao', '').lower() or \
-                     location_lower in row.get('airport', '').lower() or \
-                     location_lower in row.get('region_name', '').lower() or \
-                     location_lower in row.get('country_code', '').lower() or \
-                     location_lower in row.get('iata', '').lower():
-                    results.append({
-                        'icao': row['icao'],
-                        'iata': row.get('iata', ''),
-                        'airport': row.get('airport', ''),
-                        'region': row.get('region_name', ''),
-                        'country': row.get('country_code', ''),
-                        'latitude': row.get('latitude', ''),
-                        'longitude': row.get('longitude', '')
-                    })
-                
                 if len(results) >= max_results:
                     break
-        
-        return results if results else [{"error": f"No airport found matching: {location}"}]
     except Exception as e:
-        return [{"error": f"Error searching airports: {str(e)}"}]
+        return [{"error": str(e)}]
+    return results or [{"error": f"No airport matching: {location}"}]
 
-async def get_weather_agent() -> tuple[mcp_client.MCPClient, Agent]:
-    """Initialize the MCP client and create the agent with its tools."""
-    client = mcp_client.MCPClient()
-    client.load_servers(str(CONFIG_FILE))
-    mcp_tools = await client.start()
-    
-    # Add the airport lookup tool
-    def lookup_airport_codes(location: str, max_results: int = 10) -> str:
-        """
-        Look up airport information by location name, airport name, or ICAO code.
-        Use this tool when you need to find airport codes and details.
-        
-        Args:
-            location: Location, airport name, or ICAO code (e.g., "Hong Kong", "VHHH", "London Heathrow")
-            max_results: Maximum number of results to return (default: 10)
-            
-        Returns:
-            JSON string with list of matching airports with their ICAO codes, names, and locations
-        """
-        results = search_airport_by_location(location, max_results)
-        return json.dumps(results, indent=2)
-    
-    # Combine MCP tools with the airport lookup tool
-    all_tools = mcp_tools + [lookup_airport_codes]
-    
-    # Create the agent with all tools
-    agent = Agent(
-        model=get_model(),
-        tools=all_tools,
-        system_prompt="""You are a helpful assistant specializing in weather information. You have access to tools to:
 
-1. **Look up airport codes**: Use the 'lookup_airport_codes' tool to find ICAO codes from location names (cities, countries, regions, airport names)
-2. **Fetch aviation weather**: Get METAR, TAF, AIRMETs, and other aviation weather data using ICAO codes
-3. **Fetch Hong Kong weather**: Get current conditions, forecasts, and warnings for Hong Kong
+@tool
+def lookup_airport_codes(location: str, max_results: int = 10) -> str:
+    """
+    Find airport ICAO codes by location name, airport name, city, country, or IATA code.
+    ALWAYS call this first when the user mentions a place name without an ICAO code.
 
-**Important workflow**:
-- When a user mentions a location without providing an ICAO code, FIRST use 'lookup_airport_codes' to find the correct ICAO code(s)
-- If multiple airports are found, select the most relevant one(s) based on context (e.g., major international airports for general queries)
-- Then use the ICAO codes to fetch weather data from the appropriate tools
+    Examples:
+      lookup_airport_codes("Heathrow")   → [{icao: "EGLL", ...}]
+      lookup_airport_codes("Hong Kong")  → [{icao: "VHHH", ...}]
+      lookup_airport_codes("London")     → EGLL, EGLC, EGKK, EGSS, ...
+      lookup_airport_codes("JFK")        → [{icao: "KJFK", ...}]
+    """
+    return json.dumps(_search_airport(location, max_results), indent=2)
 
-Provide clear, concise, and relevant information based on the data retrieved by the tools."""
+
+# ── System prompts ────────────────────────────────────────────────────────────
+
+ROUTER_PROMPT = """\
+You are a query router. Classify the query into EXACTLY ONE category:
+
+aviation_weather — METAR, TAF, PIREPs, AIRMETs, VFR/IFR conditions, route weather, airport weather briefings
+hk_weather       — Hong Kong weather, HKO forecasts, HK typhoon/rainstorm warnings, HK visibility
+aircraft         — live flight tracking, ADS-B positions, callsign/registration lookup, flight history, arrivals/departures
+general          — mixed queries, comparisons across multiple domains, or anything that doesn't fit above
+
+Reply with ONLY the category name. No explanation, no punctuation, no extra words."""
+
+AVIATION_PROMPT = """\
+You are an expert aviation meteorologist. Answer step-by-step.
+
+Step 1 — Resolve ICAO: If the user mentions a place name (not a raw ICAO), call \
+`lookup_airport_codes` first.
+Step 2 — Fetch weather with the right tools:
+  • Basic airport  → get_metar + get_taf
+  • Route planning → get_weather_along_route + determine_flight_category
+  • Area hazards   → get_pireps + get_airmets
+  • Specific       → check_vfr_minimums, get_weather_by_radius
+Step 3 — Synthesise: pilot-friendly briefing with flight category (VFR/MVFR/IFR/LIFR)."""
+
+HK_PROMPT = """\
+You are a Hong Kong weather expert with live HKO data.
+
+Step 1 — Current conditions : get_current_weather
+Step 2 — Warnings           : get_weather_warnings (ALWAYS include active typhoon/rainstorm alerts)
+Step 3 — Forecast           : get_weather_forecast
+Step 4 — Visibility (if relevant): get_visibility_data
+
+Combine into a clear, actionable weather report."""
+
+AIRCRAFT_PROMPT = """\
+You are an aviation intelligence analyst with live ADS-B tracking.
+
+Step 1 — Resolve airports: place name → call `lookup_airport_codes`.
+Step 2 — Track:
+  • By callsign          → get_callsign
+  • By registration      → get_registration
+  • By area              → get_search_radius (lat/lon/radius_nm)
+  • Arrivals             → get_arrivals_by_airport
+  • Departures           → get_departures_by_airport
+  • Flight history       → get_flights_by_aircraft (needs ICAO24 hex)
+  • Emergency squawk     → get_squawk (7700=emergency, 7600=radio, 7500=hijack)
+
+Present positions, altitudes, speeds, and routes clearly."""
+
+GENERAL_PROMPT = """\
+You are a comprehensive aviation and weather assistant.
+
+Tools available:
+  • lookup_airport_codes  — resolve place names → ICAO (call this first for any location)
+  • Aviation weather      — METAR, TAF, PIREPs, AIRMETs, flight categories, route/radius
+  • HK weather            — HKO conditions, forecasts, warnings, visibility
+  • Aircraft tracking     — ADS-B live, history, callsign/registration/area search
+
+For complex queries:
+  1. Identify what data is needed
+  2. Resolve location names to ICAO codes
+  3. Call each required tool in sequence
+  4. Synthesise a complete, well-structured response"""
+
+
+# Maximum ReAct steps (agent↔tools rounds) per specialist call.
+# Default LangGraph limit is 25; complex multi-tool queries need more headroom.
+SPECIALIST_RECURSION_LIMIT = 50
+
+
+# ── Context trimming ──────────────────────────────────────────────────────────
+
+def _trim_messages(messages: list, max_count: int = MAX_HISTORY_MESSAGES) -> list:
+    """Return the most recent `max_count` messages.
+
+    Preserves the full state in the checkpointer; only limits what the LLM sees
+    on each inference call.  The slice always starts at a natural boundary so
+    the specialist sees a coherent conversation snippet.
+    """
+    if len(messages) <= max_count:
+        return messages
+    return messages[-max_count:]
+
+
+# ── Graph builder ─────────────────────────────────────────────────────────────
+
+def _build_graph(
+    aviation_tools: List[StructuredTool],
+    hk_tools: List[StructuredTool],
+    adsb_tools: List[StructuredTool],
+    checkpointer: MemorySaver,
+):
+    llm = get_chat_model(streaming=True)
+    router_llm = get_chat_model(streaming=False, max_tokens=16)
+
+    # ── Specialist sub-graphs (create_react_agent) ─────────────────────────────
+    aviation_agent = create_react_agent(
+        llm,
+        tools=aviation_tools + [lookup_airport_codes],
+        prompt=AVIATION_PROMPT,
     )
-    return client, agent
+    hk_agent = create_react_agent(
+        llm,
+        tools=hk_tools,
+        prompt=HK_PROMPT,
+    )
+    aircraft_agent = create_react_agent(
+        llm,
+        tools=adsb_tools + [lookup_airport_codes],
+        prompt=AIRCRAFT_PROMPT,
+    )
+    general_agent = create_react_agent(
+        llm,
+        tools=aviation_tools + hk_tools + adsb_tools + [lookup_airport_codes],
+        prompt=GENERAL_PROMPT,
+    )
+
+    # ── Router node ────────────────────────────────────────────────────────────
+    def router_node(state: AgentState) -> Dict[str, Any]:
+        human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
+        latest = human_msgs[-1].content if human_msgs else ""
+        response = router_llm.invoke([
+            SystemMessage(content=ROUTER_PROMPT),
+            HumanMessage(content=latest),
+        ])
+        raw = response.content.strip().lower()
+
+        if "aviation" in raw:
+            route = "aviation_weather"
+        elif "hk" in raw or "hong" in raw:
+            route = "hk_weather"
+        elif "aircraft" in raw:
+            route = "aircraft"
+        else:
+            route = "general"
+
+        logger.info("Router: '%s...' → %s", latest[:80], route)
+        return {"route": route}
+
+    def pick_specialist(state: AgentState) -> str:
+        return state.get("route", "general")
+
+    # ── Specialist wrapper nodes with context trimming ─────────────────────────
+    # Each wrapper trims the message history before calling the sub-graph so the
+    # specialist LLM never receives more than MAX_HISTORY_MESSAGES messages.
+    # Events from inside the sub-graph (tool calls, token streams) are still
+    # visible to astream_events because they share the same LangChain callback
+    # context via Python contextvars.
+
+    def _make_specialist_node(agent_graph):
+        async def node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
+            trimmed = _trim_messages(state["messages"])
+            # Forward parent callbacks (Langfuse, streaming) but give the sub-graph
+            # its own higher recursion limit so complex multi-tool queries complete.
+            sub_config: RunnableConfig = {
+                "callbacks":       config.get("callbacks"),
+                "recursion_limit": SPECIALIST_RECURSION_LIMIT,
+            }
+            result = await agent_graph.ainvoke({"messages": trimmed}, config=sub_config)
+            return {"messages": result["messages"]}
+        return node
+
+    # ── Assemble graph ─────────────────────────────────────────────────────────
+    graph = StateGraph(AgentState)
+
+    graph.add_node("router", router_node)
+    graph.add_node("aviation_weather", _make_specialist_node(aviation_agent))
+    graph.add_node("hk_weather",       _make_specialist_node(hk_agent))
+    graph.add_node("aircraft",         _make_specialist_node(aircraft_agent))
+    graph.add_node("general",          _make_specialist_node(general_agent))
+
+    graph.add_edge(START, "router")
+    graph.add_conditional_edges(
+        "router",
+        pick_specialist,
+        {
+            "aviation_weather": "aviation_weather",
+            "hk_weather":       "hk_weather",
+            "aircraft":         "aircraft",
+            "general":          "general",
+        },
+    )
+    for specialist in ("aviation_weather", "hk_weather", "aircraft", "general"):
+        graph.add_edge(specialist, END)
+
+    return graph.compile(checkpointer=checkpointer)
+
+
+# ── Public startup helper ─────────────────────────────────────────────────────
+
+async def init_graph():
+    """
+    Start MCP servers, build LangGraph graph, return
+    (compiled_graph, mcp_client_instance, checkpointer).
+    """
+    client = mcp_module.MCPClient()
+    client.load_servers(str(CONFIG_FILE))
+    tools_by_server = await client.start_langchain()
+
+    aviation_tools = tools_by_server.get("aviation-weather", [])
+    hk_tools       = tools_by_server.get("hk-climate", [])
+    adsb_tools     = tools_by_server.get("adsb", [])
+
+    logger.info(
+        "MCP tools loaded — aviation: %d, hk: %d, adsb: %d",
+        len(aviation_tools), len(hk_tools), len(adsb_tools),
+    )
+
+    checkpointer = MemorySaver()
+    graph = _build_graph(aviation_tools, hk_tools, adsb_tools, checkpointer)
+    return graph, client, checkpointer
+
+
+# ── CLI entry-point ───────────────────────────────────────────────────────────
 
 async def main():
-    
-    mcp_client_instance, weather_agent = await get_weather_agent()
+    logging.basicConfig(level=logging.INFO)
+    from rich.console import Console
+    from rich.markdown import Markdown
+
     console = Console()
-    messages = []
-    
+    graph, mcp_client_instance, _ = await init_graph()
+    config = {"configurable": {"thread_id": "cli-session"}}
+
     try:
         while True:
-            # Get user input
-            user_input = input("\n[You] ")
-            
-            # Check if user wants to exit
-            if user_input.lower() in ['exit', 'quit', 'bye', 'goodbye']:
-                print("Goodbye!")
-                break
-            
             try:
-                # Process the user input and output the response
-                console.print("\n[bold blue][Assistant][/bold blue]")
-                
-                # Optional: Show a status indicator while the agent is running
-                with Status("[bold green]Processing your request and calling tools if needed...[/bold green]", spinner="clock") as status:
-                    async with weather_agent.run_stream(
-                        user_input, message_history=messages
-                    ) as result:
-                        # Update status once tool calls are finished
-                        status.update("[bold yellow]Formatting response...[/bold yellow]")
-                        
-                        # Stream the final response from the LLM
-                        full_response_text = ""
-                        async for message in result.stream_text(delta=True):
-                            full_response_text += message
-                            # Update the live display with the current text
-                            # Using Panel for better visual separation
-                            live_content = Panel(Markdown(full_response_text), border_style="bright_blue", title="Weather Report")
-                            # Note: Live updates might flicker with complex content.
-                            # Consider printing chunks directly if Panel causes issues.
-                            console.clear_live() # Clear previous live display if any
-                            console.print(live_content) 
-                
-                # Add the new messages (including tool calls and final LLM response) to the chat history
-                messages.extend(result.all_messages())
-                
-            except Exception as e:
-                console.print(f"\n[bold red][Error][/bold red] An error occurred: {str(e)}")
+                user_input = input("\n[You] ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if user_input.lower() in ("exit", "quit", "bye"):
+                break
+            if not user_input:
+                continue
 
-    except KeyboardInterrupt:
-        print("\nInterrupted by user. Goodbye!")
-        
+            console.print("\n[bold blue][Assistant][/bold blue]")
+            full = ""
+            async for ev in graph.astream_events(
+                {"messages": [HumanMessage(content=user_input)]},
+                config=config,
+                version="v2",
+            ):
+                kind = ev.get("event", "")
+                meta = ev.get("metadata", {})
+                node = meta.get("langgraph_node", "")
+
+                if kind == "on_chat_model_stream" and node != "router":
+                    chunk = ev["data"]["chunk"]
+                    token = chunk.content if hasattr(chunk, "content") else ""
+                    if token:
+                        full += token
+                        print(token, end="", flush=True)
+                elif kind == "on_tool_start":
+                    tool_name = ev.get("name", "tool")
+                    console.print(
+                        f"\n[dim]  ⚙  {tool_name}({json.dumps(ev['data'].get('input', {}))[:120]})[/dim]"
+                    )
+                elif kind == "on_tool_end":
+                    console.print("[dim]  ✓  done[/dim]")
+
+            print()
+            if full:
+                console.print(Markdown(full))
     finally:
-        # Ensure proper cleanup of MCP client resources when exiting
-        if mcp_client_instance:
-            await mcp_client_instance.cleanup()
+        await mcp_client_instance.cleanup()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
