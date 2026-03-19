@@ -1,0 +1,182 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+
+/* ── shadcn/ui CSS variables ──────────────────────────────────── */
+:root {
+  --background: 226 100% 98%;
+  --foreground: 225 35% 16%;
+  --card: 0 0% 100%;
+  --card-foreground: 225 35% 16%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 225 35% 16%;
+  --primary: 236 79% 64%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 221 88% 96%;
+  --secondary-foreground: 226 33% 25%;
+  --muted: 225 70% 97%;
+  --muted-foreground: 224 17% 43%;
+  --accent: 210 94% 95%;
+  --accent-foreground: 226 33% 25%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 230 48% 89%;
+  --input: 230 48% 89%;
+  --ring: 236 79% 64%;
+  --radius: 0.85rem;
+
+  --surface-glass: linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.54));
+  --surface-glass-soft: linear-gradient(160deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.45));
+  --shadow-soft: 0 12px 30px rgba(115, 126, 194, 0.14);
+  --shadow-focus: 0 0 0 3px rgba(106, 123, 255, 0.24);
+
+  --status-vfr: 150 73% 38%;
+  --status-mvfr: 47 95% 45%;
+  --status-ifr: 28 91% 52%;
+  --status-lifr: 3 79% 58%;
+}
+
+.dark {
+  --background: 230 32% 12%;
+  --foreground: 225 40% 94%;
+  --card: 230 35% 16%;
+  --card-foreground: 225 40% 94%;
+  --popover: 230 35% 16%;
+  --popover-foreground: 225 40% 94%;
+  --primary: 234 89% 71%;
+  --primary-foreground: 232 45% 12%;
+  --secondary: 226 28% 22%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 227 26% 22%;
+  --muted-foreground: 225 20% 74%;
+  --accent: 227 26% 22%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 227 21% 30%;
+  --input: 227 21% 30%;
+  --ring: 234 89% 71%;
+
+  --surface-glass: linear-gradient(150deg, rgba(48, 56, 89, 0.7), rgba(48, 56, 89, 0.45));
+  --surface-glass-soft: linear-gradient(160deg, rgba(45, 53, 84, 0.6), rgba(45, 53, 84, 0.42));
+  --shadow-soft: 0 12px 30px rgba(6, 10, 31, 0.38);
+  --shadow-focus: 0 0 0 3px rgba(141, 155, 255, 0.24);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  border-color: hsl(var(--border));
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: hsl(var(--background));
+  background-image:
+    radial-gradient(900px 500px at -12% -10%, rgba(183, 171, 255, 0.42), transparent 62%),
+    radial-gradient(840px 460px at 112% -14%, rgba(126, 188, 255, 0.38), transparent 63%),
+    linear-gradient(160deg, #f5f7ff 0%, #eef3ff 48%, #e9f3ff 100%);
+  color: hsl(var(--foreground));
+  font-family: 'Manrope', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+.dark body {
+  background-image:
+    radial-gradient(940px 580px at -8% -18%, rgba(136, 127, 236, 0.28), transparent 65%),
+    radial-gradient(880px 560px at 108% -18%, rgba(98, 161, 245, 0.24), transparent 67%),
+    linear-gradient(165deg, #171c33 0%, #151d34 52%, #122031 100%);
+}
+
+.glass-panel {
+  background: var(--surface-glass);
+  border: 1px solid color-mix(in oklab, hsl(var(--border)) 82%, white 18%);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(14px);
+}
+
+.glass-panel-soft {
+  background: var(--surface-glass-soft);
+  border: 1px solid color-mix(in oklab, hsl(var(--border)) 78%, white 22%);
+  backdrop-filter: blur(10px);
+}
+
+.pilot-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.pilot-status::before {
+  content: '';
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+}
+
+.pilot-status-vfr {
+  color: hsl(var(--status-vfr));
+  background: color-mix(in oklab, hsl(var(--status-vfr)) 18%, white 82%);
+}
+
+.pilot-status-vfr::before { background: hsl(var(--status-vfr)); }
+
+.pilot-status-mvfr {
+  color: hsl(var(--status-mvfr));
+  background: color-mix(in oklab, hsl(var(--status-mvfr)) 22%, white 78%);
+}
+
+.pilot-status-mvfr::before { background: hsl(var(--status-mvfr)); }
+
+.pilot-status-ifr {
+  color: hsl(var(--status-ifr));
+  background: color-mix(in oklab, hsl(var(--status-ifr)) 20%, white 80%);
+}
+
+.pilot-status-ifr::before { background: hsl(var(--status-ifr)); }
+
+.pilot-status-lifr {
+  color: hsl(var(--status-lifr));
+  background: color-mix(in oklab, hsl(var(--status-lifr)) 20%, white 80%);
+}
+
+.pilot-status-lifr::before { background: hsl(var(--status-lifr)); }
+
+.fade-in-up {
+  animation: fade-in-up 450ms ease-out both;
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-in-up {
+    animation: none;
+  }
+}
+
+/* Smooth scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
