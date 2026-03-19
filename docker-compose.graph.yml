@@ -1,0 +1,18 @@
+# docker-compose.graph.yml
+# Compose override that replaces the default postgres service with a custom
+# image that has BOTH pgvector AND Apache AGE installed.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.graph.yml up
+#
+# Build the custom image first (takes ~10 min):
+#   docker compose -f docker-compose.yml -f docker-compose.graph.yml build postgres
+#
+# The init.sql gracefully initialises the aviation graph on first start.
+
+services:
+  postgres:
+    build:
+      context: ./infra
+      dockerfile: Dockerfile.postgres
+    image: capstone-postgres-age:latest

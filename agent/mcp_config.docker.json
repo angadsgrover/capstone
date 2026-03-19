@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "aviation-weather": { "url": "http://mcp-aviation-wx:8001/sse" },
+    "hk-climate":       { "url": "http://mcp-hk-climate:8002/sse" },
+    "adsb":             { "url": "http://mcp-adsb:8003/sse" }
+  }
+}

@@ -39,7 +39,8 @@ from langgraph.prebuilt import create_react_agent
 import mcp_client as mcp_module
 
 SCRIPT_DIR = pathlib.Path(__file__).parent.resolve()
-CONFIG_FILE = SCRIPT_DIR / "mcp_config.json"
+_mcp_cfg_env = os.environ.get("MCP_CONFIG")
+CONFIG_FILE = pathlib.Path(_mcp_cfg_env) if _mcp_cfg_env else SCRIPT_DIR / "mcp_config.json"
 ICAO_MAPPING_FILE = SCRIPT_DIR / "icao_mapping.csv"
 
 load_dotenv()
@@ -215,30 +216,71 @@ def _build_graph(
     hk_tools: List[StructuredTool],
     adsb_tools: List[StructuredTool],
     checkpointer: MemorySaver,
+    memory_manager=None,
+    db=None,
 ):
     llm = get_chat_model(streaming=True)
     router_llm = get_chat_model(streaming=False, max_tokens=16)
 
+    # ── Optional RAG tool (requires PostgreSQL) ────────────────────────────────
+    rag_tool = None
+    if db is not None and db.available:
+        try:
+            from tools.rag_search import make_rag_search_tool
+            rag_tool = make_rag_search_tool(db)
+            logger.info("RAG tool enabled.")
+        except Exception as e:
+            logger.warning("RAG tool unavailable: %s", e)
+
+    # ── Optional graph search tool (requires Apache AGE) ──────────────────────
+    graph_tool = None
+    if db is not None and db.available:
+        try:
+            from tools.graph_search import make_graph_search_tool
+            graph_tool = make_graph_search_tool(db)
+            logger.info("Graph search tool enabled.")
+        except Exception as e:
+            logger.debug("Graph search tool unavailable: %s", e)
+
+    # ── Optional cognee knowledge graph tool (long-term memory) ───────────────
+    cognee_tool = None
+    if memory_manager is not None and hasattr(memory_manager, "long_term_available"):
+        if memory_manager.long_term_available:
+            try:
+                from tools.cognee_search import make_cognee_search_tool
+                cognee_tool = make_cognee_search_tool(memory_manager)
+                logger.info("cognee knowledge graph tool enabled.")
+            except Exception as e:
+                logger.warning("cognee tool unavailable: %s", e)
+
+    def _extra_tools() -> List[StructuredTool]:
+        extras = []
+        if rag_tool:
+            extras.append(rag_tool)
+        if graph_tool:
+            extras.append(graph_tool)
+        if cognee_tool:
+            extras.append(cognee_tool)
+        return extras
+
     # ── Specialist sub-graphs (create_react_agent) ─────────────────────────────
+    # Prompts are injected per-request in _make_specialist_node so that
+    # long-term memory context can be prepended before each inference.
     aviation_agent = create_react_agent(
         llm,
-        tools=aviation_tools + [lookup_airport_codes],
-        prompt=AVIATION_PROMPT,
+        tools=aviation_tools + [lookup_airport_codes] + _extra_tools(),
     )
     hk_agent = create_react_agent(
         llm,
-        tools=hk_tools,
-        prompt=HK_PROMPT,
+        tools=hk_tools + _extra_tools(),
     )
     aircraft_agent = create_react_agent(
         llm,
-        tools=adsb_tools + [lookup_airport_codes],
-        prompt=AIRCRAFT_PROMPT,
+        tools=adsb_tools + [lookup_airport_codes] + _extra_tools(),
     )
     general_agent = create_react_agent(
         llm,
-        tools=aviation_tools + hk_tools + adsb_tools + [lookup_airport_codes],
-        prompt=GENERAL_PROMPT,
+        tools=aviation_tools + hk_tools + adsb_tools + [lookup_airport_codes] + _extra_tools(),
     )
 
     # ── Router node ────────────────────────────────────────────────────────────
@@ -266,23 +308,49 @@ def _build_graph(
     def pick_specialist(state: AgentState) -> str:
         return state.get("route", "general")
 
-    # ── Specialist wrapper nodes with context trimming ─────────────────────────
+    # ── Specialist wrapper nodes with context trimming + memory injection ────────
     # Each wrapper trims the message history before calling the sub-graph so the
     # specialist LLM never receives more than MAX_HISTORY_MESSAGES messages.
-    # Events from inside the sub-graph (tool calls, token streams) are still
-    # visible to astream_events because they share the same LangChain callback
-    # context via Python contextvars.
+    # The base_prompt is prepended as a SystemMessage so long-term memory context
+    # can be appended to it per-request without rebuilding the graph.
 
-    def _make_specialist_node(agent_graph):
+    def _make_specialist_node(agent_graph, base_prompt: str):
         async def node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
             trimmed = _trim_messages(state["messages"])
-            # Forward parent callbacks (Langfuse, streaming) but give the sub-graph
-            # its own higher recursion limit so complex multi-tool queries complete.
+
+            # Resolve session_id for memory lookup
+            session_id = config.get("configurable", {}).get("thread_id", "default")
+            human_msgs = [m for m in trimmed if isinstance(m, HumanMessage)]
+            latest_query = human_msgs[-1].content if human_msgs else ""
+
+            # Inject dual memories (short-term + long-term) into the system prompt
+            system_content = base_prompt
+            if memory_manager is not None:
+                # Use search_combined for both short-term (mem0) and long-term (cognee) context
+                if hasattr(memory_manager, "search_combined"):
+                    # DualMemoryManager: get both memory types
+                    memories = await memory_manager.search_combined(
+                        latest_query,
+                        user_id=session_id,
+                        short_term_limit=3,
+                        long_term_limit=2,
+                    )
+                else:
+                    # Fallback for legacy MemoryManager (short-term only)
+                    memories = await memory_manager.search(latest_query, user_id=session_id)
+
+                if memories:
+                    system_content = f"{base_prompt}\n\n## Memory Context\n{memories}"
+
+            messages_to_send = [SystemMessage(content=system_content)] + trimmed
+
             sub_config: RunnableConfig = {
                 "callbacks":       config.get("callbacks"),
                 "recursion_limit": SPECIALIST_RECURSION_LIMIT,
             }
-            result = await agent_graph.ainvoke({"messages": trimmed}, config=sub_config)
+            result = await agent_graph.ainvoke(
+                {"messages": messages_to_send}, config=sub_config
+            )
             return {"messages": result["messages"]}
         return node
 
@@ -290,10 +358,10 @@ def _build_graph(
     graph = StateGraph(AgentState)
 
     graph.add_node("router", router_node)
-    graph.add_node("aviation_weather", _make_specialist_node(aviation_agent))
-    graph.add_node("hk_weather",       _make_specialist_node(hk_agent))
-    graph.add_node("aircraft",         _make_specialist_node(aircraft_agent))
-    graph.add_node("general",          _make_specialist_node(general_agent))
+    graph.add_node("aviation_weather", _make_specialist_node(aviation_agent, AVIATION_PROMPT))
+    graph.add_node("hk_weather",       _make_specialist_node(hk_agent,       HK_PROMPT))
+    graph.add_node("aircraft",         _make_specialist_node(aircraft_agent,  AIRCRAFT_PROMPT))
+    graph.add_node("general",          _make_specialist_node(general_agent,   GENERAL_PROMPT))
 
     graph.add_edge(START, "router")
     graph.add_conditional_edges(
@@ -314,7 +382,7 @@ def _build_graph(
 
 # ── Public startup helper ─────────────────────────────────────────────────────
 
-async def init_graph():
+async def init_graph(memory_manager=None, db=None):
     """
     Start MCP servers, build LangGraph graph, return
     (compiled_graph, mcp_client_instance, checkpointer).
@@ -333,7 +401,10 @@ async def init_graph():
     )
 
     checkpointer = MemorySaver()
-    graph = _build_graph(aviation_tools, hk_tools, adsb_tools, checkpointer)
+    graph = _build_graph(
+        aviation_tools, hk_tools, adsb_tools, checkpointer,
+        memory_manager=memory_manager, db=db,
+    )
     return graph, client, checkpointer
 
 

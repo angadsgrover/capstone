@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -14,11 +15,65 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
 
+from db import Database
+from memory import DualMemoryManager  # Upgraded from MemoryManager
+from cache import CacheManager
 from orchestrator import init_graph
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+# ── Module-level singletons ────────────────────────────────────────────────────
+
+db             = Database()
+memory_manager = DualMemoryManager()  # Unified short-term (mem0) + long-term (cognee)
+cache          = CacheManager()       # Redis cache for frequently-asked queries
+
+# ── Lifespan ───────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global global_graph, global_mcp_client
+
+    # Startup
+    await db.connect()
+    await memory_manager.init()
+    await cache.init()  # Initialize Redis cache
+
+    scheduler = None
+    if db.available:
+        try:
+            from ingestion.scheduler import setup_scheduler
+            scheduler = setup_scheduler(db)
+        except Exception as e:
+            logger.warning("Ingestion scheduler unavailable: %s", e)
+
+    print("Initialising LangGraph agent with MCP servers…")
+    try:
+        global_graph, global_mcp_client, _ = await init_graph(
+            memory_manager=memory_manager, db=db,
+        )
+        print("LangGraph agent ready.")
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        raise
+
+    yield
+
+    # Shutdown
+    if scheduler:
+        try:
+            scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+    if global_mcp_client:
+        print("Shutting down MCP client…")
+        await global_mcp_client.cleanup()
+    await db.close()
+    await cache.close()  # Close Redis connection
+
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -46,28 +101,6 @@ _NODE_LABELS: Dict[str, str] = {
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-# ── Startup / shutdown ─────────────────────────────────────────────────────────
-
-@app.on_event("startup")
-async def startup_event():
-    global global_graph, global_mcp_client
-    print("Initialising LangGraph agent with MCP servers…")
-    try:
-        global_graph, global_mcp_client, _ = await init_graph()
-        print("LangGraph agent ready.")
-    except Exception:
-        import traceback
-        traceback.print_exc()
-        raise
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    if global_mcp_client:
-        print("Shutting down MCP client…")
-        await global_mcp_client.cleanup()
 
 
 # ── Langfuse (optional) ───────────────────────────────────────────────────────
@@ -467,19 +500,405 @@ async def chat_endpoint(request: Request):
     if not global_graph:
         return JSONResponse({"error": "Agent not initialised"}, status_code=500)
 
+    # Check cache first (only for non-session-specific queries)
+    # Cache key includes session to handle context
+    route = data.get("route", "unknown")  # Optional pre-classified route
+    cached_response = await cache.get_llm_response(user_input, session_id, route)
+    if cached_response:
+        logger.info("Cache HIT for query: %s", user_input[:80])
+        return JSONResponse({"response": cached_response, "cached": True})
+
     config = _build_config(session_id, trace_name=user_input[:80])
     try:
         result = await global_graph.ainvoke(
             {"messages": [HumanMessage(content=user_input)]},
             config=config,
         )
-        messages   = result.get("messages", [])
-        ai_msgs    = [m for m in messages if hasattr(m, "content") and not isinstance(m, HumanMessage)]
+        messages      = result.get("messages", [])
+        ai_msgs       = [m for m in messages if hasattr(m, "content") and not isinstance(m, HumanMessage)]
         response_text = ai_msgs[-1].content if ai_msgs else "No response generated."
-        return JSONResponse({"response": response_text})
+        detected_route = result.get("route", "general")
+
+        # Persist conversation turn to postgres
+        if db.available:
+            await db.save_conversation(session_id, "human", user_input)
+            await db.save_conversation(session_id, "ai", response_text)
+
+        # Store short-term conversation memories (fire-and-forget, non-blocking)
+        if memory_manager.short_term_available:
+            asyncio.create_task(
+                memory_manager.add_conversation(
+                    [
+                        {"role": "user",      "content": user_input},
+                        {"role": "assistant", "content": response_text},
+                    ],
+                    user_id=session_id,
+                    metadata={"route": detected_route},
+                )
+            )
+
+        # Cache the response (fire-and-forget)
+        asyncio.create_task(
+            cache.set_llm_response(user_input, session_id, detected_route, response_text)
+        )
+
+        return JSONResponse({"response": response_text, "cached": False})
     except Exception as e:
         logger.exception("Chat endpoint error for session %s", session_id)
         return JSONResponse({"response": f"Error: {e}"}, status_code=500)
+
+
+# ── Knowledge Graph / Document Ingestion Endpoints ────────────────────────────
+
+
+@app.post("/api/knowledge/ingest")
+async def ingest_document(request: Request):
+    """
+    Ingest a document into long-term knowledge graph (cognee).
+
+    Body:
+        {
+            "text": "document content...",
+            "metadata": {"source": "NTSB", "date": "2024-01-15", ...},
+            "dataset": "aviation_knowledge"  # optional
+        }
+
+    Returns:
+        {"success": true} or {"success": false, "error": "..."}
+    """
+    if not memory_manager.long_term_available:
+        return JSONResponse(
+            {"success": False, "error": "Long-term memory (cognee) unavailable"},
+            status_code=503,
+        )
+
+    try:
+        data = await request.json()
+        text = data.get("text", "")
+        metadata = data.get("metadata", {})
+        dataset = data.get("dataset", "aviation_knowledge")
+
+        if not text:
+            return JSONResponse(
+                {"success": False, "error": "No text provided"},
+                status_code=400,
+            )
+
+        success = await memory_manager.add_knowledge(
+            text=text,
+            metadata=metadata,
+            dataset_name=dataset,
+        )
+
+        if success:
+            logger.info("Ingested document: %d chars, dataset=%s", len(text), dataset)
+            return JSONResponse({"success": True, "dataset": dataset})
+        else:
+            return JSONResponse(
+                {"success": False, "error": "Ingestion failed"},
+                status_code=500,
+            )
+
+    except Exception as e:
+        logger.exception("Document ingestion error")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500,
+        )
+
+
+@app.post("/api/knowledge/ingest-batch")
+async def ingest_documents_batch(request: Request):
+    """
+    Ingest multiple documents in batch.
+
+    Body:
+        {
+            "documents": [
+                {"text": "...", "metadata": {...}},
+                {"text": "...", "metadata": {...}},
+                ...
+            ],
+            "dataset": "aviation_knowledge"  # optional
+        }
+
+    Returns:
+        {"success": N, "total": M, "failed": K}
+    """
+    if not memory_manager.long_term_available:
+        return JSONResponse(
+            {"success": False, "error": "Long-term memory (cognee) unavailable"},
+            status_code=503,
+        )
+
+    try:
+        data = await request.json()
+        documents = data.get("documents", [])
+        dataset = data.get("dataset", "aviation_knowledge")
+
+        if not documents:
+            return JSONResponse(
+                {"success": False, "error": "No documents provided"},
+                status_code=400,
+            )
+
+        success_count = await memory_manager.add_knowledge_batch(
+            documents=documents,
+            dataset_name=dataset,
+        )
+
+        return JSONResponse({
+            "success": success_count,
+            "total": len(documents),
+            "failed": len(documents) - success_count,
+            "dataset": dataset,
+        })
+
+    except Exception as e:
+        logger.exception("Batch ingestion error")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500,
+        )
+
+
+@app.get("/api/knowledge/search")
+async def search_knowledge(
+    query: str = "",
+    dataset: str = "aviation_knowledge",
+    limit: int = 5,
+):
+    """
+    Search long-term knowledge graph.
+
+    Query params:
+        - query: Search query (required)
+        - dataset: Dataset name (default: aviation_knowledge)
+        - limit: Max results (default: 5, max: 10)
+
+    Returns:
+        {"results": "formatted knowledge graph results", "cached": bool}
+    """
+    if not query:
+        return JSONResponse(
+            {"error": "No query provided"},
+            status_code=400,
+        )
+
+    if not memory_manager.long_term_available:
+        return JSONResponse(
+            {"results": "Long-term memory (cognee) unavailable"},
+        )
+
+    try:
+        limit = max(1, min(limit, 10))
+
+        # Check cache first
+        cached_results = await cache.get_knowledge_search(query, dataset)
+        if cached_results:
+            logger.debug("Cache HIT for knowledge search: %s", query[:80])
+            return JSONResponse({
+                "query": query,
+                "dataset": dataset,
+                "results": cached_results,
+                "cached": True,
+            })
+
+        # Cache miss: query knowledge graph
+        results = await memory_manager.search_long_term(
+            query=query,
+            dataset_name=dataset,
+            limit=limit,
+        )
+
+        # Cache the results (fire-and-forget)
+        asyncio.create_task(cache.set_knowledge_search(query, dataset, results))
+
+        return JSONResponse({
+            "query": query,
+            "dataset": dataset,
+            "results": results or "No results found",
+            "cached": False,
+        })
+
+    except Exception as e:
+        logger.exception("Knowledge search error")
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=500,
+        )
+
+
+@app.get("/api/knowledge/entity/{entity_name}")
+async def get_entity_info(
+    entity_name: str,
+    dataset: str = "aviation_knowledge",
+):
+    """
+    Retrieve entity information from knowledge graph.
+
+    Path params:
+        - entity_name: Entity identifier (e.g., "EGLL", "Boeing 737")
+
+    Query params:
+        - dataset: Dataset name (default: aviation_knowledge)
+
+    Returns:
+        {"entity": {...}} or {"error": "Not found"}
+    """
+    if not memory_manager.long_term_available:
+        return JSONResponse(
+            {"error": "Long-term memory (cognee) unavailable"},
+            status_code=503,
+        )
+
+    try:
+        entity = await memory_manager.get_entity(
+            entity_name=entity_name,
+            dataset_name=dataset,
+        )
+
+        if entity:
+            return JSONResponse({"entity": entity})
+        else:
+            return JSONResponse(
+                {"error": f"Entity not found: {entity_name}"},
+                status_code=404,
+            )
+
+    except Exception as e:
+        logger.exception("Entity retrieval error")
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=500,
+        )
+
+
+@app.get("/api/memory/status")
+async def memory_status():
+    """
+    Get memory system status.
+
+    Returns:
+        {
+            "short_term": {"available": true, "provider": "mem0"},
+            "long_term": {"available": true, "provider": "cognee"},
+            "cache": {"available": true, "provider": "redis", "hit_rate": 0.85}
+        }
+    """
+    cache_stats = await cache.get_stats() if cache.available else {"available": False}
+
+    return JSONResponse({
+        "short_term": {
+            "available": memory_manager.short_term_available,
+            "provider": "mem0",
+            "description": "Recent conversational context (last N turns)",
+        },
+        "long_term": {
+            "available": memory_manager.long_term_available,
+            "provider": "cognee",
+            "description": "Persistent knowledge graph (domain expertise)",
+        },
+        "cache": {
+            "available": cache.available,
+            "provider": "redis",
+            "description": "High-performance query cache",
+            **cache_stats,
+        },
+        "dual_memory": {
+            "enabled": memory_manager.short_term_available or memory_manager.long_term_available,
+            "both_available": memory_manager.short_term_available and memory_manager.long_term_available,
+        },
+    })
+
+
+# ── Cache Management Endpoints ────────────────────────────────────────────────
+
+
+@app.get("/api/cache/stats")
+async def cache_stats_endpoint():
+    """
+    Get cache statistics (hit rate, keyspace info).
+
+    Returns:
+        {"available": true, "hit_rate": 0.85, "keyspace_hits": 1234, ...}
+    """
+    if not cache.available:
+        return JSONResponse(
+            {"available": False, "error": "Cache not available"},
+            status_code=503,
+        )
+
+    try:
+        stats = await cache.get_stats()
+        return JSONResponse(stats)
+    except Exception as e:
+        logger.exception("Cache stats error")
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=500,
+        )
+
+
+@app.post("/api/cache/clear")
+async def clear_cache(request: Request):
+    """
+    Clear cache by pattern.
+
+    Body:
+        {"pattern": "weather:*"}  # pattern to clear (default: all)
+
+    Returns:
+        {"cleared": N}  # number of keys deleted
+    """
+    if not cache.available:
+        return JSONResponse(
+            {"error": "Cache not available"},
+            status_code=503,
+        )
+
+    try:
+        data = await request.json()
+        pattern = data.get("pattern", "*")  # default: clear all
+
+        cleared = await cache.clear_pattern(pattern)
+        return JSONResponse({"cleared": cleared, "pattern": pattern})
+    except Exception as e:
+        logger.exception("Cache clear error")
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=500,
+        )
+
+
+@app.post("/api/cache/invalidate-knowledge")
+async def invalidate_knowledge_cache():
+    """
+    Invalidate all knowledge graph caches.
+
+    Use this after batch document ingestion to ensure fresh results.
+
+    Returns:
+        {"cleared": N}
+    """
+    if not cache.available:
+        return JSONResponse(
+            {"error": "Cache not available"},
+            status_code=503,
+        )
+
+    try:
+        cleared = await cache.invalidate_knowledge_cache()
+        return JSONResponse({
+            "cleared": cleared,
+            "message": "Knowledge graph cache invalidated",
+        })
+    except Exception as e:
+        logger.exception("Knowledge cache invalidation error")
+        return JSONResponse(
+            {"error": str(e)},
+            status_code=500,
+        )
 
 
 if __name__ == "__main__":

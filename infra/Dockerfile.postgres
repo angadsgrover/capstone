@@ -1,0 +1,34 @@
+# infra/Dockerfile.postgres
+# Custom PostgreSQL 16 image with BOTH pgvector AND Apache AGE installed.
+#
+# Usage — docker-compose profile "graph":
+#   docker compose --profile graph build postgres-age
+#   docker compose --profile graph up
+#
+# The default compose setup (without --profile graph) still uses the plain
+# pgvector/pgvector:pg16 image, which runs fine without AGE.
+
+FROM pgvector/pgvector:pg16
+
+# ── System deps needed to build Apache AGE from source ────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    postgresql-server-dev-16 \
+    libreadline-dev \
+    zlib1g-dev \
+    bison \
+    flex \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Clone and build Apache AGE 1.5.0 for pg16 ────────────────────────────────
+ARG AGE_VERSION=PG16/1.5.0-rc0
+RUN git clone --depth 1 --branch ${AGE_VERSION} \
+    https://github.com/apache/age.git /tmp/age \
+    && cd /tmp/age \
+    && make PG_CONFIG=/usr/bin/pg_config \
+    && make install \
+    && rm -rf /tmp/age
+
+# pgvector is already installed via the base image.
+# Both extensions are now available to CREATE EXTENSION.
