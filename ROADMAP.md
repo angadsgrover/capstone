@@ -6,7 +6,7 @@ This document outlines the strategic roadmap for enhancing the Aviation Intellig
 
 ---
 
-## ✅ Completed Features (Phases 1-8, 13-15)
+## ✅ Completed Features (Phases 1-9, 13-15)
 
 - [x] **Phase 1**: Vite + React 19 frontend with streaming UI
 - [x] **Phase 2**: LangGraph orchestrator with 4 specialist agents
@@ -16,19 +16,29 @@ This document outlines the strategic roadmap for enhancing the Aviation Intellig
 - [x] **Phase 6**: OpenRouter embeddings support
 - [x]  **Phase 7**: Dual-memory system (mem0 + cognee)
 - [x] **Phase 8**: Redis caching + React Native mobile guide
+- [x] **Phase 9**: Hybrid BM25 + vector RAG reranking (exact-match uplift with bounded over-fetch)
 - [x] **Phase 13**: Advanced visualizations (airport map data, trends, flight paths, safety heatmap)
 - [x] **Phase 14**: Performance optimizations (DB index/view, code-splitting, log virtualization, Redis pipeline helpers)
 - [x] **Phase 15**: Advanced multi-step agent planning (plan-and-execute graph, planning telemetry, frontend multi-step support)
 
 ---
 
-## Phase 9: BM25 Re-ranker for Hybrid Search
+## Phase 9: BM25 Re-ranker for Hybrid Search (Implemented)
 
 ### Goal
 Combine **BM25 keyword search** with **semantic vector search** for improved RAG retrieval accuracy.
 
 ### Current Limitation
 Pure vector search sometimes misses exact keyword matches (e.g., "EGLL" vs "Heathrow").
+
+### Implementation Status
+- Hybrid reranking is now implemented in `agent/tools/rag_search.py`
+- Pipeline: vector over-fetch -> BM25 lexical scoring -> weighted normalized blend -> top-k return
+- Performance safeguards:
+  - bounded over-fetch (`RAG_HYBRID_OVERFETCH_FACTOR`, `RAG_HYBRID_OVERFETCH_CAP`)
+  - fixed output limit cap (existing tool cap retained)
+  - graceful fallback to semantic-only ranking if BM25 is unavailable
+  - no frontend API contract changes required
 
 ### Implementation
 ```python

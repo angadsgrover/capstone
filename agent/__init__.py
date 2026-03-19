@@ -1,3 +1,1 @@
-"""
-Weather Data Orchestration Package - Integrating aviation and Hong Kong weather data using Pydantic AI and LangGraph
-"""
+"""Weather data orchestration package using LangGraph and MCP specialists."""

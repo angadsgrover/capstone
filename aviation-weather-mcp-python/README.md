@@ -1,54 +1,53 @@
 # Aviation Weather MCP Server
 
-A Model Context Protocol (MCP) server for aviation weather data, providing standardized access to METAR, TAF, PIREP, and AIRMET information for aviation applications.
+MCP server exposing aviation weather tools for METAR, TAF, PIREP, AIRMET, and route-level weather checks.
+
+Used by the `agent` service for `aviation_weather` and `general` routes.
 
 ## Features
 
-- FastMCP-based server for aviation weather
-- Tools for METAR, TAF, PIREP, AIRMET, and flight route weather
+- FastMCP-based tool server
+- Supports stdio and SSE transports
+- Airport, radius, and route weather utility tools
+- Flight category and VFR checks for pilot workflows
 
-## Quick Start
+## Toolset
 
-### Requirements
+- `get_metar`
+- `get_taf`
+- `get_pireps`
+- `get_airmets`
+- `get_weather_along_route`
+- `get_weather_by_radius`
+- `determine_flight_category`
+- `check_vfr_minimums`
 
-- Python 3.10+
-- [FastMCP](https://pypi.org/project/fastmcp/)
-### Installation
+## Installation
+
+From `aviation-weather-mcp-python`:
 
 ```bash
 pip install -e .
 ```
 
-### Running the Server
+## Run
 
-#### CLI
-
-```bash
-aviation-weather-mcp          # Run with stdio transport (default)
-aviation-weather-mcp --sse    # Run with SSE transport
-aviation-weather-mcp --host 0.0.0 --port 8000  # Custom host/port
-```
-
-#### Python Module
+CLI:
 
 ```bash
-python -m aviation_weather_mcp_server          # Run with stdio transport (default)
-python -m aviation_weather_mcp_server --sse    # Run with SSE transport
+aviation-weather-mcp
+aviation-weather-mcp --sse
+aviation-weather-mcp --sse --host 0.0.0.0 --port 8000
 ```
 
-#### Docker
+Module mode:
 
 ```bash
-docker build -t aviation-weather-mcp .
-docker run --rm -it aviation-weather-mcp        # Run with stdio transport
+python -m aviation_weather_mcp_server
+python -m aviation_weather_mcp_server --sse
 ```
 
-## Tools
+## Integration
 
-- **get_metar**: Fetch current METAR weather observations for airports
-- **get_taf**: Fetch TAF (Terminal Aerodrome Forecast) for airports
-- **get_pireps**: Fetch pilot reports (PIREPs) for a geographic area
-- **get_airmets**: Fetch current AIRMETs (Airmen's Meteorological Information)
-- **get_weather_along_route**: Get weather conditions along a flight route
-- **get_weather_by_radius**: Get weather conditions within a radius of an airport
-
+The `agent` service connects through its MCP config (`agent/mcp_config.json` and `agent/mcp_config.docker.json`).
+Keep tool names and signatures stable to avoid downstream orchestrator breakage.
