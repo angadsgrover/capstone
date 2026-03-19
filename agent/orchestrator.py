@@ -5,11 +5,15 @@ Architecture:
   User Input
       │
       ▼
-  router  ──classifies intent──►  aviation_weather │ hk_weather │ aircraft │ general
+  router  ──classifies intent──►  aviation_weather │ hk_weather │ aircraft │ general │ planning
                                        │
                                   create_react_agent (ReAct loop with focused tools)
                                        │
                                       END
+
+Advanced Features:
+  - **Planning Mode**: Complex multi-step queries are auto-detected and routed to plan-and-execute
+  - **Self-Healing**: Tool failures trigger LLM-based parameter correction + retry
 
 Context management:
   Each specialist receives at most MAX_HISTORY_MESSAGES recent messages so the
@@ -37,6 +41,19 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
 
 import mcp_client as mcp_module
+
+# Optional imports for advanced features
+try:
+    from planning import should_use_planning, build_plan_execute_graph
+    PLANNING_AVAILABLE = True
+except ImportError:
+    PLANNING_AVAILABLE = False
+
+try:
+    from advanced_tools import execute_with_healing, ToolComposer, wrap_tools_with_healing
+    HEALING_AVAILABLE = True
+except ImportError:
+    HEALING_AVAILABLE = False
 
 SCRIPT_DIR = pathlib.Path(__file__).parent.resolve()
 _mcp_cfg_env = os.environ.get("MCP_CONFIG")
@@ -125,6 +142,11 @@ def lookup_airport_codes(location: str, max_results: int = 10) -> str:
     return json.dumps(_search_airport(location, max_results), indent=2)
 
 
+# ── Environment ──────────────────────────────────────────────────────────────
+
+ENABLE_PLANNING = os.getenv("ENABLE_PLANNING", "true").lower() == "true"
+ENABLE_SELF_HEALING = os.getenv("ENABLE_SELF_HEALING", "true").lower() == "true"
+
 # ── System prompts ────────────────────────────────────────────────────────────
 
 ROUTER_PROMPT = """\
@@ -133,7 +155,14 @@ You are a query router. Classify the query into EXACTLY ONE category:
 aviation_weather — METAR, TAF, PIREPs, AIRMETs, VFR/IFR conditions, route weather, airport weather briefings
 hk_weather       — Hong Kong weather, HKO forecasts, HK typhoon/rainstorm warnings, HK visibility
 aircraft         — live flight tracking, ADS-B positions, callsign/registration lookup, flight history, arrivals/departures
+planning         — complex queries requiring multiple steps, comparisons between airports, or sequential operations
 general          — mixed queries, comparisons across multiple domains, or anything that doesn't fit above
+
+Use 'planning' for queries that:
+- Compare multiple airports or locations
+- Ask for sequential analysis (first X, then Y)
+- Require combining data from multiple sources
+- Use words like "compare", "both", "versus", "best", "optimal"
 
 Reply with ONLY the category name. No explanation, no punctuation, no extra words."""
 
@@ -263,25 +292,40 @@ def _build_graph(
             extras.append(cognee_tool)
         return extras
 
+    # ── Self-healing wrapper (optional) ──────────────────────────────────────
+    def _maybe_wrap_with_healing(tools: List[StructuredTool]) -> List[StructuredTool]:
+        """Optionally wrap tools with self-healing capability."""
+        if ENABLE_SELF_HEALING and HEALING_AVAILABLE:
+            llm_config = {
+                "model": os.getenv("MODEL_CHOICE", "openai/gpt-4o-mini"),
+                "base_url": os.getenv("BASE_URL", "https://openrouter.ai/api/v1"),
+                "api_key": os.getenv("LLM_API_KEY", ""),
+            }
+            return wrap_tools_with_healing(tools, max_retries=2, llm_config=llm_config)
+        return tools
+
     # ── Specialist sub-graphs (create_react_agent) ─────────────────────────────
     # Prompts are injected per-request in _make_specialist_node so that
     # long-term memory context can be prepended before each inference.
     aviation_agent = create_react_agent(
         llm,
-        tools=aviation_tools + [lookup_airport_codes] + _extra_tools(),
+        tools=_maybe_wrap_with_healing(aviation_tools + [lookup_airport_codes] + _extra_tools()),
     )
     hk_agent = create_react_agent(
         llm,
-        tools=hk_tools + _extra_tools(),
+        tools=_maybe_wrap_with_healing(hk_tools + _extra_tools()),
     )
     aircraft_agent = create_react_agent(
         llm,
-        tools=adsb_tools + [lookup_airport_codes] + _extra_tools(),
+        tools=_maybe_wrap_with_healing(adsb_tools + [lookup_airport_codes] + _extra_tools()),
     )
     general_agent = create_react_agent(
         llm,
-        tools=aviation_tools + hk_tools + adsb_tools + [lookup_airport_codes] + _extra_tools(),
+        tools=_maybe_wrap_with_healing(aviation_tools + hk_tools + adsb_tools + [lookup_airport_codes] + _extra_tools()),
     )
+
+    if ENABLE_SELF_HEALING and HEALING_AVAILABLE:
+        logger.info("Self-healing enabled for tool execution.")
 
     # ── Router node ────────────────────────────────────────────────────────────
     def router_node(state: AgentState) -> Dict[str, Any]:
@@ -299,6 +343,8 @@ def _build_graph(
             route = "hk_weather"
         elif "aircraft" in raw:
             route = "aircraft"
+        elif "planning" in raw and ENABLE_PLANNING and PLANNING_AVAILABLE:
+            route = "planning"
         else:
             route = "general"
 
@@ -354,6 +400,33 @@ def _build_graph(
             return {"messages": result["messages"]}
         return node
 
+    # ── Planning node (for complex multi-step queries) ─────────────────────────
+    async def planning_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
+        """Handle complex queries with plan-and-execute pattern."""
+        if not PLANNING_AVAILABLE:
+            # Fallback to general if planning not available
+            return await _make_specialist_node(general_agent, GENERAL_PROMPT)(state, config)
+
+        trimmed = _trim_messages(state["messages"])
+        human_msgs = [m for m in trimmed if isinstance(m, HumanMessage)]
+        latest_query = human_msgs[-1].content if human_msgs else ""
+
+        # Build plan-execute graph with general agent as executor
+        llm_config = config.get("configurable", {})
+        plan_graph = build_plan_execute_graph(general_agent, llm_config)
+
+        # Execute plan
+        result = await plan_graph.ainvoke(
+            {"input": latest_query},
+            config=config,
+        )
+
+        # Return response as AI message
+        from langchain_core.messages import AIMessage
+        response_content = result.get("response", "Unable to complete multi-step analysis.")
+
+        return {"messages": trimmed + [AIMessage(content=response_content)]}
+
     # ── Assemble graph ─────────────────────────────────────────────────────────
     graph = StateGraph(AgentState)
 
@@ -363,19 +436,33 @@ def _build_graph(
     graph.add_node("aircraft",         _make_specialist_node(aircraft_agent,  AIRCRAFT_PROMPT))
     graph.add_node("general",          _make_specialist_node(general_agent,   GENERAL_PROMPT))
 
+    # Add planning node if available
+    if ENABLE_PLANNING and PLANNING_AVAILABLE:
+        graph.add_node("planning", planning_node)
+
     graph.add_edge(START, "router")
+
+    # Build conditional routing
+    route_map = {
+        "aviation_weather": "aviation_weather",
+        "hk_weather":       "hk_weather",
+        "aircraft":         "aircraft",
+        "general":          "general",
+    }
+    if ENABLE_PLANNING and PLANNING_AVAILABLE:
+        route_map["planning"] = "planning"
+
     graph.add_conditional_edges(
         "router",
         pick_specialist,
-        {
-            "aviation_weather": "aviation_weather",
-            "hk_weather":       "hk_weather",
-            "aircraft":         "aircraft",
-            "general":          "general",
-        },
+        route_map,
     )
+
     for specialist in ("aviation_weather", "hk_weather", "aircraft", "general"):
         graph.add_edge(specialist, END)
+
+    if ENABLE_PLANNING and PLANNING_AVAILABLE:
+        graph.add_edge("planning", END)
 
     return graph.compile(checkpointer=checkpointer)
 

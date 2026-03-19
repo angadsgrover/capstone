@@ -26,6 +26,22 @@ docker compose -f docker-compose.yml -f docker-compose.graph.yml up -d
 
 ---
 
+## Unified Entry Point (Local Dev)
+
+```bash
+cp .env.example .env
+
+# Start all services (MCP servers + agent + frontend)
+./start.sh
+
+# Options:
+# ./start.sh --check        # Health checks only
+# ./start.sh --test         # Integration tests after startup
+# ./start.sh --no-frontend  # API only
+```
+
+---
+
 ## Local Development
 
 ```bash

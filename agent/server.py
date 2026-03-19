@@ -88,7 +88,7 @@ global_graph = None
 global_mcp_client = None
 event_queues: Dict[str, asyncio.Queue] = {}
 
-SPECIALIST_NODES = {"aviation_weather", "hk_weather", "aircraft", "general"}
+SPECIALIST_NODES = {"aviation_weather", "hk_weather", "aircraft", "general", "planning"}
 
 _NODE_LABELS: Dict[str, str] = {
     "router":           "Router",
@@ -96,6 +96,7 @@ _NODE_LABELS: Dict[str, str] = {
     "hk_weather":       "HK Weather",
     "aircraft":         "Aircraft Tracking",
     "general":          "General Assistant",
+    "planning":         "Multi-Step Planner",
 }
 
 
@@ -451,6 +452,11 @@ async def stream_chat(input: str = "", session_id: str = "default"):
     config = _build_config(session_id, trace_name=input[:80])
 
     async def stream_tokens():
+        current_specialist = ""
+        tool_start_times: Dict[str, float] = {}
+        step_counts: Dict[str, int] = {}
+        router_start = 0.0
+
         try:
             async for ev in global_graph.astream_events(
                 {"messages": [HumanMessage(content=input)]},
@@ -460,21 +466,73 @@ async def stream_chat(input: str = "", session_id: str = "default"):
                 kind = ev.get("event", "")
                 meta = ev.get("metadata", {})
                 node = meta.get("langgraph_node", "")
+                ts = _now_iso()
 
+                # ── Routing decision ─────────────────────────────────────────
+                if kind == "on_chain_start" and node == "router":
+                    router_start = time.monotonic()
+
+                if kind == "on_chain_start" and node in SPECIALIST_NODES:
+                    current_specialist = node
+                    step_counts[node] = 0
+                    router_dur = int((time.monotonic() - router_start) * 1000) if router_start else 0
+                    yield f"event: route\ndata: {json.dumps({'route': node, 'specialist': node, 'duration': router_dur, 'timestamp': ts})}\n\n"
+
+                # ── Streaming tokens ─────────────────────────────────────────
                 if kind == "on_chat_model_stream" and node != "router":
                     chunk = ev["data"]["chunk"]
                     token = chunk.content if hasattr(chunk, "content") else ""
                     if token:
-                        yield f"data: {json.dumps({'chunk': token})}\n\n"
+                        yield f"event: chunk\ndata: {json.dumps({'chunk': token})}\n\n"
 
+                # ── Thinking/reasoning events ────────────────────────────────
+                elif kind == "on_chat_model_end" and node and node != "router":
+                    output = ev["data"].get("output")
+                    tool_calls = []
+                    content = ""
+
+                    if output is not None:
+                        if hasattr(output, "tool_calls"):
+                            tool_calls = output.tool_calls or []
+                        if hasattr(output, "content"):
+                            content = output.content or ""
+                        elif hasattr(output, "generations"):
+                            for gen_list in output.generations:
+                                for gen in gen_list:
+                                    msg = getattr(gen, "message", None)
+                                    if msg:
+                                        tool_calls = getattr(msg, "tool_calls", []) or tool_calls
+                                        content = getattr(msg, "content", "") or content
+
+                    parent = current_specialist or node
+
+                    if tool_calls:
+                        step_num = step_counts.get(parent, 0) + 1
+                        step_counts[parent] = step_num
+                        tc_names = _tool_call_names(tool_calls)
+                        yield f"event: thinking\ndata: {json.dumps({'type': 'reasoning', 'thinking': f'Step {step_num}: Planning - {tc_names}', 'step': step_num, 'timestamp': ts})}\n\n"
+                    elif content:
+                        step_num = step_counts.get(parent, 0) + 1
+                        step_counts[parent] = step_num
+                        preview = content[:120].replace("\n", " ")
+                        yield f"event: thinking\ndata: {json.dumps({'type': 'synthesis', 'thinking': f'Step {step_num}: Synthesizing response', 'result': preview, 'step': step_num, 'timestamp': ts})}\n\n"
+
+                # ── Tool start ───────────────────────────────────────────────
                 elif kind == "on_tool_start":
-                    tool_name  = ev.get("name", "tool")
+                    tool_name = ev.get("name", "tool")
                     tool_input = ev["data"].get("input", {})
-                    yield f"data: {json.dumps({'tool_start': tool_name, 'tool_input': _fmt_input(tool_input)})}\n\n"
+                    tool_start_times[tool_name] = time.monotonic()
+                    yield f"event: tool_start\ndata: {json.dumps({'tool_start': tool_name, 'name': tool_name, 'tool_input': tool_input, 'input': tool_input, 'timestamp': ts})}\n\n"
 
+                # ── Tool end ─────────────────────────────────────────────────
                 elif kind == "on_tool_end":
                     tool_name = ev.get("name", "tool")
-                    yield f"data: {json.dumps({'tool_end': tool_name})}\n\n"
+                    output = ev["data"].get("output", "")
+                    output_str = str(output) if output else ""
+                    duration_ms = int((time.monotonic() - tool_start_times.pop(tool_name, time.monotonic())) * 1000)
+                    # Truncate output for SSE (full output in workflow events)
+                    output_preview = output_str[:500] if output_str else ""
+                    yield f"event: tool_end\ndata: {json.dumps({'tool_end': tool_name, 'name': tool_name, 'output': output_preview, 'duration': duration_ms, 'timestamp': ts})}\n\n"
 
             yield "event: end\ndata: {}\n\n"
         except Exception as e:

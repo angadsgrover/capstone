@@ -41,6 +41,21 @@ docker compose up -d
 docker compose down
 ```
 
+## Unified Entry Point (Local Dev)
+
+```bash
+# 1. Configure env (root .env)
+cp .env.example .env
+
+# 2. Start everything (MCP servers + agent + frontend)
+./start.sh
+
+# Optional:
+# ./start.sh --check     # Health checks only
+# ./start.sh --test      # Run integration tests after startup
+# ./start.sh --no-frontend  # API-only
+```
+
 ### With Apache AGE Graph (Optional)
 
 ```bash
