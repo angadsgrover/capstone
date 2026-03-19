@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from db import Database
 from memory import DualMemoryManager  # Upgraded from MemoryManager
@@ -97,11 +97,34 @@ _NODE_LABELS: Dict[str, str] = {
     "aircraft":         "Aircraft Tracking",
     "general":          "General Assistant",
     "planning":         "Multi-Step Planner",
+    "plan":             "Plan Builder",
+    "execute":          "Plan Step Executor",
+    "synthesize":       "Final Synthesizer",
 }
+
+PLANNING_INTERNAL_NODES = {"plan", "execute", "synthesize"}
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _extract_planning_data(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extract planning metadata from graph result payload or final AI message."""
+    if not result:
+        return None
+
+    planning_data = result.get("planning_data")
+    if isinstance(planning_data, dict):
+        return planning_data
+
+    messages = result.get("messages", [])
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage):
+            maybe = getattr(msg, "additional_kwargs", {}).get("planning")
+            if isinstance(maybe, dict):
+                return maybe
+    return None
 
 
 # ── Langfuse (optional) ───────────────────────────────────────────────────────
@@ -174,7 +197,7 @@ async def _run_with_events(user_input: str, session_id: str) -> None:
     # Per-session step tracking (counts LLM → tool-call rounds in a specialist)
     step_counts: dict[str, int] = {}   # keyed by specialist node name
 
-    INTERNAL = {"agent", "tools"}
+    INTERNAL = {"agent", "tools", *PLANNING_INTERNAL_NODES}
     INTERNAL_LABELS = {"agent": "LLM Call", "tools": "Tool Execution"}
 
     try:
@@ -256,6 +279,22 @@ async def _run_with_events(user_input: str, session_id: str) -> None:
                         "timestamp":   ts,
                         "raw":         {"node": node, "steps": total_steps if node in SPECIALIST_NODES else None},
                     })
+
+                # Emit plan details when the planner node completes.
+                if node == "plan":
+                    output = ev.get("data", {}).get("output", {})
+                    plan_steps = output.get("original_plan") or output.get("plan") or []
+                    if plan_steps:
+                        await _push(session_id, {
+                            "nodeId": "planning",
+                            "event_type": "plan",
+                            "status": "completed",
+                            "label": "Execution Plan",
+                            "details": f"Generated {len(plan_steps)} steps",
+                            "steps": plan_steps,
+                            "timestamp": ts,
+                            "raw": {"steps": plan_steps},
+                        })
 
             # ── LLM completed a generation (reasoning event) ───────────────────
             elif kind == "on_chat_model_end" and node and node not in ("router",):
@@ -478,6 +517,29 @@ async def stream_chat(input: str = "", session_id: str = "default"):
                     router_dur = int((time.monotonic() - router_start) * 1000) if router_start else 0
                     yield f"event: route\ndata: {json.dumps({'route': node, 'specialist': node, 'duration': router_dur, 'timestamp': ts})}\n\n"
 
+                # Planning internals: emit explicit plan + execution-step telemetry
+                if kind == "on_chain_end" and node == "plan":
+                    output = ev.get("data", {}).get("output", {})
+                    plan_steps = output.get("original_plan") or output.get("plan") or []
+                    if plan_steps:
+                        yield (
+                            "event: plan\n"
+                            f"data: {json.dumps({'plan': plan_steps, 'steps': plan_steps, 'timestamp': ts})}\n\n"
+                        )
+
+                if kind == "on_chain_end" and node == "execute":
+                    output = ev.get("data", {}).get("output", {})
+                    trace = output.get("execution_trace") or []
+                    if trace:
+                        latest = trace[-1]
+                        step_num = int(latest.get("step", len(trace)))
+                        task = latest.get("task", "")
+                        preview = latest.get("result", "")[:160].replace("\n", " ")
+                        yield (
+                            "event: thinking\n"
+                            f"data: {json.dumps({'type': 'reasoning', 'thinking': f'Step {step_num}: {task}', 'result': preview, 'step': step_num, 'timestamp': ts})}\n\n"
+                        )
+
                 # ── Streaming tokens ─────────────────────────────────────────
                 if kind == "on_chat_model_stream" and node != "router":
                     chunk = ev["data"]["chunk"]
@@ -576,6 +638,7 @@ async def chat_endpoint(request: Request):
         ai_msgs       = [m for m in messages if hasattr(m, "content") and not isinstance(m, HumanMessage)]
         response_text = ai_msgs[-1].content if ai_msgs else "No response generated."
         detected_route = result.get("route", "general")
+        planning_data = _extract_planning_data(result)
 
         # Persist conversation turn to postgres
         if db.available:
@@ -600,7 +663,14 @@ async def chat_endpoint(request: Request):
             cache.set_llm_response(user_input, session_id, detected_route, response_text)
         )
 
-        return JSONResponse({"response": response_text, "cached": False})
+        return JSONResponse({
+            "response": response_text,
+            "cached": False,
+            "route": detected_route,
+            "plan": planning_data.get("plan", []) if planning_data else [],
+            "execution_trace": planning_data.get("execution_trace", []) if planning_data else [],
+            "multi_step": bool(planning_data),
+        })
     except Exception as e:
         logger.exception("Chat endpoint error for session %s", session_id)
         return JSONResponse({"response": f"Error: {e}"}, status_code=500)

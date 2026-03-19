@@ -79,6 +79,7 @@ MAX_RESPONSE_TOKENS = 2_048
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     route: str          # set by router node, read by conditional edge
+    planning_data: Dict[str, Any]
 
 
 # ── LLM factory ───────────────────────────────────────────────────────────────
@@ -424,8 +425,20 @@ def _build_graph(
         # Return response as AI message
         from langchain_core.messages import AIMessage
         response_content = result.get("response", "Unable to complete multi-step analysis.")
+        planning_data = {
+            "mode": "plan_execute",
+            "query": latest_query,
+            "plan": result.get("original_plan", []),
+            "execution_trace": result.get("execution_trace", []),
+            "total_steps": len(result.get("execution_trace", [])),
+        }
 
-        return {"messages": trimmed + [AIMessage(content=response_content)]}
+        return {
+            "messages": trimmed + [
+                AIMessage(content=response_content, additional_kwargs={"planning": planning_data})
+            ],
+            "planning_data": planning_data,
+        }
 
     # ── Assemble graph ─────────────────────────────────────────────────────────
     graph = StateGraph(AgentState)

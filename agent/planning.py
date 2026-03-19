@@ -43,7 +43,9 @@ class PlanExecuteState(TypedDict):
     """State for Plan-and-Execute agent."""
     input: str                          # Original user query
     plan: List[str]                     # List of steps to execute
+    original_plan: List[str]            # Immutable copy of generated plan
     past_steps: List[tuple[str, str]]   # (step, result) history
+    execution_trace: List[Dict[str, str]]  # Structured trace for UI/API
     response: str                       # Final synthesized response
     current_step_idx: int               # Which step we're on
 
@@ -112,7 +114,9 @@ def create_plan(state: PlanExecuteState, config: RunnableConfig) -> Dict[str, An
 
     return {
         "plan": plan_steps,
+        "original_plan": list(plan_steps),
         "past_steps": [],
+        "execution_trace": [],
         "current_step_idx": 0,
     }
 
@@ -170,6 +174,14 @@ async def execute_step(
 
     return {
         "past_steps": [*past_steps, (current_step, step_result)],
+        "execution_trace": [
+            *state.get("execution_trace", []),
+            {
+                "step": str(state.get("current_step_idx", 0) + 1),
+                "task": current_step,
+                "result": step_result,
+            },
+        ],
         "plan": state["plan"][1:],  # Remove completed step
         "current_step_idx": state.get("current_step_idx", 0) + 1,
     }
