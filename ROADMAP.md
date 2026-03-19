@@ -6,7 +6,7 @@ This document outlines the strategic roadmap for enhancing the Aviation Intellig
 
 ---
 
-## ✅ Completed Features (Phases 1-8)
+## ✅ Completed Features (Phases 1-8, 13-14)
 
 - [x] **Phase 1**: Vite + React 19 frontend with streaming UI
 - [x] **Phase 2**: LangGraph orchestrator with 4 specialist agents
@@ -16,6 +16,8 @@ This document outlines the strategic roadmap for enhancing the Aviation Intellig
 - [x] **Phase 6**: OpenRouter embeddings support
 - [x]  **Phase 7**: Dual-memory system (mem0 + cognee)
 - [x] **Phase 8**: Redis caching + React Native mobile guide
+- [x] **Phase 13**: Advanced visualizations (airport map data, trends, flight paths, safety heatmap)
+- [x] **Phase 14**: Performance optimizations (DB index/view, code-splitting, log virtualization, Redis pipeline helpers)
 
 ---
 

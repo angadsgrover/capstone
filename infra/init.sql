@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS metar_history (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metar_icao_obs
     ON metar_history (icao, obs_time);
+CREATE INDEX IF NOT EXISTS idx_metar_recent_hot
+    ON metar_history (icao, obs_time DESC);
 
 -- ── Historical TAF archive ───────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS taf_history (
@@ -111,3 +113,15 @@ CREATE INDEX IF NOT EXISTS idx_safety_airport
     ON safety_events (airport_icao, event_date DESC);
 CREATE INDEX IF NOT EXISTS idx_safety_source
     ON safety_events (source, event_date DESC);
+
+-- ── Phase 14 performance surfaces ─────────────────────────────────────────────
+CREATE MATERIALIZED VIEW IF NOT EXISTS airport_stats AS
+SELECT
+    icao,
+    AVG(wind_speed_kt)::REAL AS avg_wind,
+    COUNT(*)::INT            AS metar_count
+FROM metar_history
+GROUP BY icao;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_airport_stats_icao
+    ON airport_stats (icao);

@@ -129,3 +129,109 @@ class Database:
             metadata,
         )
         return row["id"]
+
+    async def latest_metar_by_airport(self, limit: int = 12) -> list[asyncpg.Record]:
+        """Return latest METAR record per airport."""
+        if not self._pool:
+            return []
+        limit = max(1, min(limit, 50))
+        return await self._pool.fetch(
+            """
+            SELECT x.icao, x.obs_time, x.flight_cat, x.temp_c, x.wind_speed_kt, x.visibility_sm
+            FROM (
+                SELECT DISTINCT ON (icao)
+                    icao, obs_time, flight_cat, temp_c, wind_speed_kt, visibility_sm
+                FROM metar_history
+                ORDER BY icao, obs_time DESC
+            ) x
+            ORDER BY x.obs_time DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+
+    async def metar_trends(
+        self,
+        icaos: list[str],
+        hours: int = 72,
+        per_airport_limit: int = 120,
+    ) -> list[asyncpg.Record]:
+        """Return time-series METAR points for selected airports."""
+        if not self._pool or not icaos:
+            return []
+        hours = max(1, min(hours, 24 * 14))
+        per_airport_limit = max(10, min(per_airport_limit, 500))
+        return await self._pool.fetch(
+            """
+            WITH ranked AS (
+                SELECT
+                    icao,
+                    obs_time,
+                    wind_speed_kt,
+                    temp_c,
+                    ROW_NUMBER() OVER (PARTITION BY icao ORDER BY obs_time DESC) AS rn
+                FROM metar_history
+                WHERE icao = ANY($1::text[])
+                  AND obs_time >= NOW() - ($2::text || ' hours')::interval
+            )
+            SELECT icao, obs_time, wind_speed_kt, temp_c
+            FROM ranked
+            WHERE rn <= $3
+            ORDER BY icao, obs_time ASC
+            """,
+            icaos,
+            str(hours),
+            per_airport_limit,
+        )
+
+    async def safety_heatmap(self, limit: int = 20) -> list[asyncpg.Record]:
+        """Aggregate safety events per airport with a weighted severity score."""
+        if not self._pool:
+            return []
+        limit = max(1, min(limit, 100))
+        return await self._pool.fetch(
+            """
+            SELECT
+                airport_icao,
+                COUNT(*)::int AS incidents,
+                SUM(
+                    CASE
+                        WHEN LOWER(COALESCE(severity, '')) IN ('critical', 'high') THEN 3
+                        WHEN LOWER(COALESCE(severity, '')) = 'medium' THEN 2
+                        WHEN LOWER(COALESCE(severity, '')) = 'low' THEN 1
+                        ELSE 1
+                    END
+                )::int AS severity_score
+            FROM safety_events
+            WHERE airport_icao IS NOT NULL
+            GROUP BY airport_icao
+            ORDER BY severity_score DESC, incidents DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+
+    async def airport_stats_view(self) -> list[asyncpg.Record]:
+        """Read from airport_stats materialized view if available."""
+        if not self._pool:
+            return []
+        return await self._pool.fetch(
+            """
+            SELECT icao, avg_wind, metar_count
+            FROM airport_stats
+            ORDER BY metar_count DESC
+            LIMIT 20
+            """
+        )
+
+    async def refresh_airport_stats(self) -> bool:
+        """Refresh airport_stats materialized view if present."""
+        if not self._pool:
+            return False
+        exists = await self._pool.fetchval(
+            "SELECT to_regclass('public.airport_stats') IS NOT NULL"
+        )
+        if not exists:
+            return False
+        await self._pool.execute("REFRESH MATERIALIZED VIEW airport_stats")
+        return True

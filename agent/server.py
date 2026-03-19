@@ -898,6 +898,120 @@ async def cache_stats_endpoint():
         )
 
 
+# ── Phase 13/14 Data APIs ──────────────────────────────────────────────────────
+
+_AIRPORT_COORDS: Dict[str, Dict[str, float]] = {
+    "VHHH": {"lat": 22.3080, "lon": 113.9185},
+    "EGLL": {"lat": 51.4700, "lon": -0.4543},
+    "KJFK": {"lat": 40.6413, "lon": -73.7781},
+    "WSSS": {"lat": 1.3644, "lon": 103.9915},
+    "OMDB": {"lat": 25.2532, "lon": 55.3657},
+    "RJTT": {"lat": 35.5494, "lon": 139.7798},
+    "YSSY": {"lat": -33.9399, "lon": 151.1753},
+    "LFPG": {"lat": 49.0097, "lon": 2.5479},
+}
+
+
+@app.get("/api/visualizations/airport-map")
+async def airport_map_data(limit: int = 12):
+    if not db.available:
+        return JSONResponse({"airports": [], "error": "Database unavailable"}, status_code=503)
+    rows = await db.latest_metar_by_airport(limit=limit)
+    airports = []
+    for r in rows:
+        icao = str(r["icao"]).strip().upper()
+        coords = _AIRPORT_COORDS.get(icao)
+        if not coords:
+            continue
+        airports.append({
+            "icao": icao,
+            "lat": coords["lat"],
+            "lon": coords["lon"],
+            "obs_time": r["obs_time"].isoformat() if r["obs_time"] else None,
+            "flight_cat": r["flight_cat"],
+            "temp_c": r["temp_c"],
+            "wind_speed_kt": r["wind_speed_kt"],
+            "visibility_sm": r["visibility_sm"],
+        })
+    return JSONResponse({"airports": airports})
+
+
+@app.get("/api/visualizations/weather-trends")
+async def weather_trends_data(icaos: str = "VHHH,EGLL,KJFK", hours: int = 72):
+    if not db.available:
+        return JSONResponse({"points": [], "error": "Database unavailable"}, status_code=503)
+    selected = [x.strip().upper()[:4] for x in icaos.split(",") if x.strip()]
+    rows = await db.metar_trends(selected, hours=hours)
+    points = [
+        {
+            "icao": str(r["icao"]).strip().upper(),
+            "obs_time": r["obs_time"].isoformat() if r["obs_time"] else None,
+            "wind_speed_kt": r["wind_speed_kt"],
+            "temp_c": r["temp_c"],
+        }
+        for r in rows
+    ]
+    return JSONResponse({"points": points, "icaos": selected, "hours": hours})
+
+
+@app.get("/api/visualizations/flight-paths")
+async def flight_paths_data(limit: int = 8):
+    """
+    Build simple route-like edges from airport coordinates for workflow-style path viz.
+    """
+    selected = list(_AIRPORT_COORDS.keys())[: max(2, min(limit, len(_AIRPORT_COORDS)))]
+    nodes = [
+        {"id": icao, "label": icao, "lat": _AIRPORT_COORDS[icao]["lat"], "lon": _AIRPORT_COORDS[icao]["lon"]}
+        for icao in selected
+    ]
+    edges = []
+    for i in range(len(selected) - 1):
+        src = selected[i]
+        dst = selected[i + 1]
+        edges.append({"id": f"{src}-{dst}", "source": src, "target": dst})
+    return JSONResponse({"nodes": nodes, "edges": edges})
+
+
+@app.get("/api/visualizations/safety-heatmap")
+async def safety_heatmap_data(limit: int = 20):
+    if not db.available:
+        return JSONResponse({"cells": [], "error": "Database unavailable"}, status_code=503)
+    rows = await db.safety_heatmap(limit=limit)
+    cells = []
+    for r in rows:
+        icao = str(r["airport_icao"]).strip().upper()
+        coords = _AIRPORT_COORDS.get(icao)
+        if not coords:
+            continue
+        cells.append({
+            "icao": icao,
+            "lat": coords["lat"],
+            "lon": coords["lon"],
+            "incidents": int(r["incidents"]),
+            "severity_score": int(r["severity_score"]),
+        })
+    return JSONResponse({"cells": cells})
+
+
+@app.post("/api/performance/refresh-airport-stats")
+async def refresh_airport_stats():
+    if not db.available:
+        return JSONResponse({"refreshed": False, "error": "Database unavailable"}, status_code=503)
+    refreshed = await db.refresh_airport_stats()
+    if not refreshed:
+        return JSONResponse(
+            {"refreshed": False, "error": "airport_stats materialized view not found"},
+            status_code=404,
+        )
+    top = await db.airport_stats_view()
+    return JSONResponse(
+        {
+            "refreshed": True,
+            "top": [{"icao": r["icao"], "avg_wind": r["avg_wind"], "metar_count": r["metar_count"]} for r in top],
+        }
+    )
+
+
 @app.post("/api/cache/clear")
 async def clear_cache(request: Request):
     """

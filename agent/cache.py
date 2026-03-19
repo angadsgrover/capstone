@@ -298,6 +298,48 @@ class CacheManager:
         await self.set(key, result, ttl=ttl)
         return result
 
+    async def mget(self, keys: list[str]) -> list[Optional[Any]]:
+        """
+        Batch get using Redis pipelining for lower round-trip latency.
+
+        Returns list aligned with input keys. Missing/error items are None.
+        """
+        if not self.available or not keys:
+            return [None for _ in keys]
+        try:
+            pipe = self._redis.pipeline()
+            for key in keys:
+                pipe.get(key)
+            raw_values = await pipe.execute()
+            return [json.loads(v) if v is not None else None for v in raw_values]
+        except Exception as e:
+            logger.debug("Cache mget error: %s", e)
+            return [None for _ in keys]
+
+    async def mset(
+        self,
+        items: dict[str, Any],
+        ttl: Optional[int] = None,
+    ) -> bool:
+        """
+        Batch set using Redis pipelining.
+        """
+        if not self.available or not items:
+            return False
+        try:
+            pipe = self._redis.pipeline()
+            for key, value in items.items():
+                serialized = json.dumps(value, default=str)
+                if ttl:
+                    pipe.setex(key, ttl, serialized)
+                else:
+                    pipe.set(key, serialized)
+            await pipe.execute()
+            return True
+        except Exception as e:
+            logger.debug("Cache mset error: %s", e)
+            return False
+
     # ── Domain-specific helpers ───────────────────────────────────────────────
 
     async def get_weather(self, icao: str, weather_type: str = "METAR") -> Optional[str]:
