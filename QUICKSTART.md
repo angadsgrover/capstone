@@ -43,6 +43,8 @@ bash ./start-local-new-drive.sh --with-infra
 bash ./start-local-new-drive.sh --with-graph
 
 # If Docker CLI is unavailable, script auto-falls back to `podman compose`
+# Local infra mode also avoids direct bind-mount of infra/init.sql, which helps
+# on Podman setups where external-drive paths (for example /Volumes/...) are blocked.
 
 # Start all services (MCP servers + agent + frontend)
 ./start.sh
@@ -126,6 +128,36 @@ psql -U capstone
 SELECT * FROM conversations LIMIT 5;
 
 # View embeddings
+
+---
+
+## August 2025 Archive Sync + Incremental Ingest (New Drive)
+
+Use this for authenticated HKO archive data (METAR / TAF / SPECI / ADS_B) and incremental benchmark/reference ingestion.
+
+```bash
+# 1) Add credentials in .env (recommended)
+# HKO_ARCHIVE_USER=...
+# HKO_ARCHIVE_PASS=...
+
+# 2) Sync archive files only (safe first run)
+python scripts/hko_archive_sync_ingest.py \
+  --target-dir /Volumes/Angad-SSD/hko-data/August_2025 \
+  --download-categories METAR,TAF,SPECI \
+  --skip-ingest
+
+# 3) Incrementally ingest into embeddings for agent reference/benchmarking
+python scripts/hko_archive_sync_ingest.py \
+  --target-dir /Volumes/Angad-SSD/hko-data/August_2025 \
+  --ingest-categories METAR,TAF,SPECI \
+  --skip-download \
+  --ingest-limit 500
+```
+
+Notes:
+- Script keeps state in `/Volumes/Angad-SSD/hko-data/August_2025/.sync_state.json` so reruns only process new files.
+- `ADS_B` downloads are supported, but embedding ingestion currently focuses on METAR/TAF/SPECI XML gzip files.
+- Tune `--ingest-limit` to control embedding cost/time.
 SELECT COUNT(*) FROM embeddings;
 
 # Check METAR history

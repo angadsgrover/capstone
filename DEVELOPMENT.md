@@ -148,9 +148,61 @@ bash ./start-local-new-drive.sh --with-graph
 ```
 
 If Docker CLI is unavailable, the bootstrap script automatically falls back to `podman compose`.
+It also uses a mount-safe local infra override and initializes Postgres via `psql`,
+which avoids common `/Volumes/...` bind-mount errors on Podman machine.
 
 This script creates a shared root `.venv`, installs all Python/frontend dependencies once, and starts the local stack.
 It requires Python 3.12 or 3.13 (3.14 may fail on dependency constraints).
+
+## August 2025 Authenticated Archive Ingestion (Incremental)
+
+Use `scripts/hko_archive_sync_ingest.py` to sync and ingest protected month archives into your new drive.
+
+### Configure credentials
+
+In root `.env`:
+
+```bash
+HKO_ARCHIVE_USER=<username>
+HKO_ARCHIVE_PASS=<password>
+```
+
+### Step 1: Download archive files once (or incrementally)
+
+```bash
+python scripts/hko_archive_sync_ingest.py \
+  --base-url https://avrdp.hko.gov.hk/Polyu_Hkyaa/August_2025/ \
+  --target-dir /Volumes/Angad-SSD/hko-data/August_2025 \
+  --download-categories METAR,TAF,SPECI,ADS_B \
+  --skip-ingest
+```
+
+### Step 2: Ingest XML data into embeddings for agent reference
+
+```bash
+python scripts/hko_archive_sync_ingest.py \
+  --base-url https://avrdp.hko.gov.hk/Polyu_Hkyaa/August_2025/ \
+  --target-dir /Volumes/Angad-SSD/hko-data/August_2025 \
+  --ingest-categories METAR,TAF,SPECI \
+  --skip-download \
+  --ingest-limit 500
+```
+
+### Incremental behavior
+
+- State file: `/Volumes/Angad-SSD/hko-data/August_2025/.sync_state.json`
+- Re-running the script skips already downloaded and ingested files.
+- Increase `--ingest-limit` for larger backfills; keep lower for daily incremental updates.
+
+### Benchmark/reference usage
+
+After ingestion, test reference quality via agent endpoint:
+
+```bash
+curl -X POST http://localhost:8000/api/agent \
+  -H "Content-Type: application/json" \
+  -d '{"input":"Using August 2025 METAR/TAF archive, summarize low-visibility periods around VHHH and cite patterns.","session_id":"bench-aug-2025"}'
+```
 
 ### 1. Clone on the new drive
 

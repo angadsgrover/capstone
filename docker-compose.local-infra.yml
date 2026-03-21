@@ -1,0 +1,6 @@
+services:
+  postgres:
+    # Override volumes for local-infra mode to avoid host bind-mount issues
+    # on some Podman machine setups (for example external drive paths).
+    volumes:
+      - pgdata:/var/lib/postgresql/data

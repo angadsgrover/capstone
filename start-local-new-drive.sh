@@ -199,10 +199,19 @@ start_infra_if_requested() {
     exit 1
   fi
 
+  local COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.local-infra.yml)
+
   if $WITH_GRAPH; then
-    $COMPOSE_CMD --profile graph up -d postgres redis neo4j
+    $COMPOSE_CMD "${COMPOSE_FILES[@]}" --profile graph up -d postgres redis neo4j
   else
-    $COMPOSE_CMD up -d postgres redis
+    $COMPOSE_CMD "${COMPOSE_FILES[@]}" up -d postgres redis
+  fi
+
+  # Run DB initialization explicitly (instead of bind-mounting init.sql)
+  # to avoid mount failures on Podman with external-drive paths.
+  if [ -f "infra/init.sql" ]; then
+    echo "Initializing PostgreSQL schema from infra/init.sql..."
+    $COMPOSE_CMD "${COMPOSE_FILES[@]}" exec -T postgres psql -U capstone -d capstone < infra/init.sql || true
   fi
 }
 

@@ -84,6 +84,7 @@ See [DEVELOPMENT.md](./DEVELOPMENT.md) for:
 Deployment/setup deep dives:
 - [DOCKER_SETUP.md](./DOCKER_SETUP.md): Full Docker operations, backups, and moving to a larger drive
 - [VM_NEW_MACHINE_SETUP.md](./VM_NEW_MACHINE_SETUP.md): Cloud VM and new machine deployment playbook
+- [scripts/hko_archive_sync_ingest.py](./scripts/hko_archive_sync_ingest.py): Authenticated archive sync + incremental embedding ingest for historical benchmarking/reference
 
 ## Architecture
 
