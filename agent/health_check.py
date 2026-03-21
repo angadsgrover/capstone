@@ -14,6 +14,7 @@ Usage:
 """
 import asyncio
 import json
+import inspect
 import logging
 import os
 import sys
@@ -77,7 +78,9 @@ class HealthChecker:
 
         for name, check_fn in checks:
             try:
-                result = await check_fn() if asyncio.iscoroutinefunction(check_fn) else check_fn()
+                result = check_fn()
+                if inspect.isawaitable(result):
+                    result = await result
                 self.results[name] = {"status": "✅ PASS", **result}
                 logger.info(f"  ✅ {name}: {result.get('message', 'OK')}")
             except Exception as e:
@@ -171,6 +174,12 @@ class HealthChecker:
             return {
                 "message": f"Redis {info.get('redis_version', 'unknown')}",
                 "version": info.get("redis_version"),
+            }
+        except Exception as e:
+            # In local non-Docker runs Redis may intentionally be absent.
+            return {
+                "message": f"Not reachable (optional): {e}",
+                "optional": True,
             }
 
         finally:
@@ -340,7 +349,9 @@ async def main():
 
         check_fn = check_map[args.service]
         try:
-            result = await check_fn() if asyncio.iscoroutinefunction(check_fn) else check_fn()
+            result = check_fn()
+            if inspect.isawaitable(result):
+                result = await result
             checker.results[args.service] = {"status": "✅ PASS", **result}
             logger.info(f"✅ {args.service}: {result.get('message', 'OK')}")
             success = True

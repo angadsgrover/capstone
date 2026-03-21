@@ -82,6 +82,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get("/health")
+async def health() -> Dict[str, Any]:
+    """Basic liveness endpoint for orchestrator and health-check utility."""
+    return {
+        "status": "ok",
+        "service": "agent",
+        "version": "1.0.0",
+    }
+
 # ── Globals ────────────────────────────────────────────────────────────────────
 
 global_graph = None

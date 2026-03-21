@@ -55,6 +55,11 @@ MCP_DIRS = {
     "adsb": BASE_DIR / "adsb_mcp",
 }
 
+MCP_MODULES = {
+    "aviation-weather": "aviation_weather_mcp_server",
+    "hk-climate": "hk_climate_mcp_server",
+}
+
 def load_env_files() -> bool:
     """Load env from root .env and optionally agent/.env (overrides)."""
     loaded = False
@@ -187,7 +192,7 @@ class ServiceOrchestrator:
             if name == "adsb":
                 cmd = [str(venv_python), str(mcp_dir / "server.py")]
             else:
-                module = name.replace("-", "_") + "_server"
+                module = MCP_MODULES.get(name, name.replace("-", "_") + "_server")
                 cmd = [str(venv_python), "-m", module]
 
             try:
