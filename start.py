@@ -28,7 +28,11 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*args, **kwargs):
+        return False
 
 # Setup logging
 logging.basicConfig(
@@ -42,6 +46,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent.resolve()
 AGENT_DIR = BASE_DIR / "agent"
 FRONTEND_DIR = BASE_DIR / "frontend-app"
+ROOT_VENV = BASE_DIR / ".venv"
 ROOT_ENV = BASE_DIR / ".env"
 AGENT_ENV = AGENT_DIR / ".env"
 MCP_DIRS = {
@@ -85,6 +90,18 @@ class ServiceOrchestrator:
             self.stop_all_services()
             sys.exit(0)
 
+    def _venv_python_for_service(self, service_dir: Path) -> Optional[Path]:
+        """Return python executable for a service, preferring local .venv then shared root .venv."""
+        local_py = service_dir / ".venv" / "bin" / "python3"
+        if local_py.exists():
+            return local_py
+
+        shared_py = ROOT_VENV / "bin" / "python3"
+        if shared_py.exists():
+            return shared_py
+
+        return None
+
     # ── Pre-flight checks ─────────────────────────────────────────────────────
 
     def validate_environment(self) -> bool:
@@ -111,15 +128,18 @@ class ServiceOrchestrator:
             logger.error("  ❌ Missing environment variables: %s", ", ".join(missing))
             return False
 
-        # Check virtual environments
-        for name, mcp_dir in MCP_DIRS.items():
-            venv_dir = mcp_dir / ".venv"
-            if not venv_dir.exists():
-                logger.warning("  ⚠️  Missing venv for %s (run setup)", name)
+        # Check virtual environment availability
+        shared_venv = ROOT_VENV / "bin" / "python3"
+        if not shared_venv.exists():
+            logger.warning("  ⚠️  Missing shared .venv (recommended for local dev)")
 
-        agent_venv = AGENT_DIR / ".venv"
-        if not agent_venv.exists():
-            logger.error("  ❌ Missing agent/.venv (run: cd agent && python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt)")
+        for name, mcp_dir in MCP_DIRS.items():
+            if not self._venv_python_for_service(mcp_dir):
+                logger.warning("  ⚠️  Missing python env for %s (create %s/.venv or root .venv)", name, mcp_dir.name)
+
+        if not self._venv_python_for_service(AGENT_DIR):
+            logger.error("  ❌ Missing Python environment for agent (create agent/.venv or root .venv)")
+            logger.info("     Recommended: bash ./start-local-new-drive.sh")
             return False
 
         # Check frontend node_modules
@@ -148,9 +168,9 @@ class ServiceOrchestrator:
                 logger.warning(f"  ⚠️  Skipping {name} (directory not found)")
                 continue
 
-            venv_python = mcp_dir / ".venv" / "bin" / "python3"
-            if not venv_python.exists():
-                logger.warning(f"  ⚠️  Skipping {name} (venv not found)")
+            venv_python = self._venv_python_for_service(mcp_dir)
+            if not venv_python:
+                logger.warning(f"  ⚠️  Skipping {name} (python env not found)")
                 continue
 
             port = ports[name]
@@ -197,9 +217,9 @@ class ServiceOrchestrator:
         """Start FastAPI agent server."""
         logger.info("🚀 Starting FastAPI agent server...")
 
-        venv_python = AGENT_DIR / ".venv" / "bin" / "python3"
-        if not venv_python.exists():
-            logger.error("  ❌ Agent venv not found")
+        venv_python = self._venv_python_for_service(AGENT_DIR)
+        if not venv_python:
+            logger.error("  ❌ Agent python environment not found")
             return False
 
         env = os.environ.copy()

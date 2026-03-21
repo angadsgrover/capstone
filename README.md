@@ -47,7 +47,10 @@ docker compose down
 # 1. Configure env (root .env)
 cp .env.example .env
 
-# 2. Start everything (MCP servers + agent + frontend)
+# 2. One-time local bootstrap (shared .venv + dependencies)
+bash ./start-local-new-drive.sh --check
+
+# 3. Start everything (MCP servers + agent + frontend)
 ./start.sh
 
 # Optional:

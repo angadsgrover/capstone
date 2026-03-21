@@ -14,10 +14,14 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Check if Python 3 is available
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 not found. Please install Python 3.10 or higher."
-    exit 1
+# Prefer shared venv interpreter when available
+if [ -x "$SCRIPT_DIR/.venv/bin/python3" ]; then
+  PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python3"
+elif command -v python3 &> /dev/null; then
+  PYTHON_BIN="python3"
+else
+  echo "❌ Python 3 not found. Please install Python 3.12 or higher."
+  exit 1
 fi
 
 # Map simplified args to start.py args
@@ -82,4 +86,4 @@ done
 
 # Run start.py with collected arguments
 cd "$SCRIPT_DIR"
-exec python3 start.py "${ARGS[@]}"
+exec "$PYTHON_BIN" start.py "${ARGS[@]}"

@@ -31,6 +31,9 @@ docker compose -f docker-compose.yml -f docker-compose.graph.yml up -d
 ```bash
 cp .env.example .env
 
+# One-time local bootstrap (shared .venv + deps)
+bash ./start-local-new-drive.sh --check
+
 # Start all services (MCP servers + agent + frontend)
 ./start.sh
 
@@ -45,13 +48,17 @@ cp .env.example .env
 ## Local Development
 
 ```bash
-# 1. Activate agent venv
-cd agent
+# 1. Create shared venv at repo root
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
 
-# 2. Start MCP servers (3 terminals)
+# 2. Install local MCP packages + agent deps once
+pip install -e aviation-weather-mcp-python
+pip install -e hk-climate-mcp-server-python
+pip install -e adsb_mcp
+pip install -r agent/requirements.txt
+
+# 3. Start MCP servers (3 terminals)
 # Terminal A:
 cd aviation-weather-mcp-python && TRANSPORT_MODE=sse PORT=8001 python -m aviation_weather_mcp_server
 
@@ -61,11 +68,11 @@ cd hk-climate-mcp-server-python && TRANSPORT_MODE=sse PORT=8002 python -m hk_cli
 # Terminal C:
 cd adsb_mcp && TRANSPORT_MODE=sse PORT=8003 python server.py --sse --host 0.0.0.0 --port 8003
 
-# 3. Start agent (Terminal D)
+# 4. Start agent (Terminal D)
 cd agent && python server.py
 # → http://localhost:8000
 
-# 4. Start frontend (Terminal E)
+# 5. Start frontend (Terminal E)
 cd frontend-app && npm install && npm run dev
 # → http://localhost:5173
 ```

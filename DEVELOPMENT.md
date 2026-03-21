@@ -4,7 +4,7 @@ This guide covers local development setup, running services individually, and te
 
 ## Prerequisites
 
-- **Python 3.12+** (3.14 optional; 3.12 recommended for stability)
+- **Python 3.12 or 3.13** (recommended: 3.12)
 - **Node.js 22+**
 - **PostgreSQL 16** (for local DB; optional if using Docker)
 - **Git**
@@ -13,18 +13,21 @@ This guide covers local development setup, running services individually, and te
 
 For iterative development without Docker, run each service in its own terminal.
 
-### 1. Backend Setup
+### 1. Backend Setup (Shared Env)
 
 ```bash
-cd agent
+cd /path/to/capstone
 
-# Create + activate venv
+# Create + activate shared venv at repo root
 python3.12 -m venv .venv
 source .venv/bin/activate  # macOS/Linux
 # or: .venv\Scripts\activate  # Windows
 
-# Install deps
-pip install -r requirements.txt
+# Install local MCP packages + agent deps
+pip install -e aviation-weather-mcp-python
+pip install -e hk-climate-mcp-server-python
+pip install -e adsb_mcp
+pip install -r agent/requirements.txt
 
 # Copy + edit .env
 cp .env.example .env
@@ -44,12 +47,7 @@ Each MCP server runs as an SSE endpoint, making them easy to test independently.
 **Aviation Weather MCP** (port 8001):
 ```bash
 cd aviation-weather-mcp-python
-source ../.venv/bin/activate  # use agent venv
-
-# Create local venv if not already done
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+source ../.venv/bin/activate
 
 # Start server in SSE mode
 TRANSPORT_MODE=sse HOST=0.0.0.0 PORT=8001 \
@@ -60,9 +58,7 @@ TRANSPORT_MODE=sse HOST=0.0.0.0 PORT=8001 \
 **HK Climate MCP** (port 8002):
 ```bash
 cd hk-climate-mcp-server-python
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+source ../.venv/bin/activate
 
 TRANSPORT_MODE=sse HOST=0.0.0.0 PORT=8002 \
   python -m hk_climate_mcp_server
@@ -71,9 +67,7 @@ TRANSPORT_MODE=sse HOST=0.0.0.0 PORT=8002 \
 **ADS-B MCP** (port 8003):
 ```bash
 cd adsb_mcp
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+source ../.venv/bin/activate
 
 TRANSPORT_MODE=sse HOST=0.0.0.0 PORT=8003 python server.py --sse --host 0.0.0.0 --port 8003
 ```
@@ -92,7 +86,7 @@ docker compose exec postgres psql -U capstone -f /docker-entrypoint-initdb.d/ini
 
 ```bash
 cd agent
-source .venv/bin/activate
+source ../.venv/bin/activate
 
 # Lifespan will:
 # - Connect to PostgreSQL (if POSTGRES_DSN set)
