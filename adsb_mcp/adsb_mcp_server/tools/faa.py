@@ -12,10 +12,8 @@ SQLite *faa_reg* table to avoid repeatedly hitting the FAA website.
 
 from __future__ import annotations
 
-import os
 import re
 import ssl
-import sys
 import time
 import random
 from typing import Any
@@ -26,8 +24,7 @@ from urllib.request import Request, urlopen
 from bs4 import BeautifulSoup
 from fastmcp import FastMCP
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from db import setup_aircraft_db
+from ..db import setup_aircraft_db
 
 # Disable certificate verification for the FAA registry (matches original behaviour)
 ssl._create_default_https_context = ssl._create_unverified_context

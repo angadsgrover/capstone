@@ -213,19 +213,30 @@ export default function ChatView() {
 
   return (
     <div
-      className="flex flex-col rounded-xl border bg-card shadow-sm overflow-hidden"
+      className="flex flex-col rounded-3xl border border-white/[0.08] bg-[hsl(228_22%_11%)]/90 backdrop-blur-2xl shadow-2xl shadow-black/20 overflow-hidden"
       style={{ height: 'calc(100vh - 160px)', minHeight: '420px' }}
     >
       {/* Chat header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
-            <FaRobot className="text-primary-foreground" size={13} />
+      <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.06] bg-white/[0.02]">
+        <div className="flex items-center gap-3">
+          <div className="relative w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+            <FaRobot className="text-white" size={16} />
+            <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-white/20 to-transparent" />
           </div>
           <div>
-            <p className="text-sm font-semibold">AI Assistant</p>
-            <p className="text-xs text-muted-foreground">
-              {isLoading ? 'Thinking…' : 'Ready'}
+            <p className="text-sm font-semibold text-white/90">AI Assistant</p>
+            <p className="text-xs text-white/40">
+              {isLoading ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  Processing...
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  Online
+                </span>
+              )}
             </p>
           </div>
         </div>
@@ -235,7 +246,7 @@ export default function ChatView() {
           size="sm"
           onClick={handleClear}
           title="Clear chat (⌘K)"
-          className="h-7 gap-1 text-xs text-muted-foreground hover:text-destructive"
+          className="h-8 gap-1.5 text-xs rounded-xl text-white/40 hover:text-red-400 hover:bg-red-500/10 transition-all duration-200"
         >
           <FaTrash size={11} />
           Clear
@@ -243,29 +254,29 @@ export default function ChatView() {
       </div>
 
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
         {messages.length === 0 && !streamingMsg ? (
           /* Empty state */
           <div className="flex flex-col items-center justify-center h-full text-center py-8">
-            <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-              <FaRobot className="text-primary" size={24} />
+            <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-indigo-500/20 via-purple-500/20 to-pink-500/20 flex items-center justify-center mb-5 border border-white/[0.08]">
+              <FaRobot className="text-indigo-400" size={28} />
             </div>
-            <h3 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200 mb-1">
+            <h3 className="text-xl font-semibold text-white/90 mb-2">
               How can I help you today?
             </h3>
-            <p className="text-sm text-muted-foreground max-w-xs mb-6">
-              Ask me about weather, aviation conditions, METAR/TAF reports, and more.
+            <p className="text-sm text-white/40 max-w-sm mb-8">
+              Ask me about aviation weather, METAR/TAF reports, flight conditions, and more.
             </p>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-md">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
               {QUICK_PROMPTS.map((prompt) => (
                 <button
                   key={prompt}
                   onClick={() => sendMessage(prompt)}
-                  className="text-left text-xs px-3 py-2.5 rounded-lg border border-border bg-muted/60
-                    hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                  className="group text-left text-sm px-4 py-3.5 rounded-2xl border border-white/[0.08] bg-white/[0.03]
+                    hover:bg-white/[0.06] hover:border-white/[0.12] text-white/60 hover:text-white/80 transition-all duration-200"
                 >
-                  {prompt}
+                  <span className="inline-block group-hover:translate-x-0.5 transition-transform duration-200">{prompt}</span>
                 </button>
               ))}
             </div>
@@ -284,15 +295,15 @@ export default function ChatView() {
             {/* Thinking dots (no content yet) */}
             {isLoading && !streamingMsg && (
               <div className="flex justify-start">
-                <div className="flex gap-2 items-center">
-                  <div className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center flex-shrink-0">
-                    <FaRobot className="text-white" size={13} />
+                <div className="flex gap-3 items-center">
+                  <div className="w-9 h-9 rounded-2xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center flex-shrink-0 shadow-lg shadow-indigo-500/20">
+                    <FaRobot className="text-white" size={14} />
                   </div>
-                  <div className="px-4 py-3 bg-zinc-100 dark:bg-zinc-700 rounded-2xl rounded-tl-none">
+                  <div className="px-5 py-4 bg-white/[0.05] border border-white/[0.08] rounded-2xl rounded-tl-md">
                     <div className="flex gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-zinc-400 animate-bounce" />
-                      <span className="w-2 h-2 rounded-full bg-zinc-400 animate-bounce [animation-delay:0.1s]" />
-                      <span className="w-2 h-2 rounded-full bg-zinc-400 animate-bounce [animation-delay:0.2s]" />
+                      <span className="w-2 h-2 rounded-full bg-indigo-400/60 animate-bounce" />
+                      <span className="w-2 h-2 rounded-full bg-purple-400/60 animate-bounce [animation-delay:0.15s]" />
+                      <span className="w-2 h-2 rounded-full bg-pink-400/60 animate-bounce [animation-delay:0.3s]" />
                     </div>
                   </div>
                 </div>
@@ -307,7 +318,7 @@ export default function ChatView() {
       <ChatInput
         onSend={sendMessage}
         disabled={!isIdle}
-        placeholder="Ask about weather… (Enter to send, Shift+Enter for newline)"
+        placeholder="Ask about weather... (Enter to send, Shift+Enter for newline)"
       />
     </div>
   )

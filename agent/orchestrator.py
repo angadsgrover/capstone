@@ -172,22 +172,27 @@ You are an expert aviation meteorologist. Answer step-by-step.
 
 Step 1 — Resolve ICAO: If the user mentions a place name (not a raw ICAO), call \
 `lookup_airport_codes` first.
-Step 2 — Fetch weather with the right tools:
+Step 2 — Check historical context: Use `rag_search` to find similar past weather \
+conditions, trends, or relevant safety bulletins for the airport/region.
+Step 3 — Fetch live weather with the right tools:
   • Basic airport  → get_metar + get_taf
   • Route planning → get_weather_along_route + determine_flight_category
   • Area hazards   → get_pireps + get_airmets
   • Specific       → check_vfr_minimums, get_weather_by_radius
-Step 3 — Synthesise: pilot-friendly briefing with flight category (VFR/MVFR/IFR/LIFR)."""
+Step 4 — Synthesise: pilot-friendly briefing with flight category (VFR/MVFR/IFR/LIFR), \
+noting any relevant historical patterns or safety concerns from the RAG results."""
 
 HK_PROMPT = """\
 You are a Hong Kong weather expert with live HKO data.
 
-Step 1 — Current conditions : get_current_weather
-Step 2 — Warnings           : get_weather_warnings (ALWAYS include active typhoon/rainstorm alerts)
-Step 3 — Forecast           : get_weather_forecast
-Step 4 — Visibility (if relevant): get_visibility_data
+Step 1 — Historical context : Use `rag_search` with source_type='taf' or 'metar' to \
+find similar past conditions in the Hong Kong region.
+Step 2 — Current conditions : get_current_weather
+Step 3 — Warnings           : get_weather_warnings (ALWAYS include active typhoon/rainstorm alerts)
+Step 4 — Forecast           : get_weather_forecast
+Step 5 — Visibility (if relevant): get_visibility_data
 
-Combine into a clear, actionable weather report."""
+Combine into a clear, actionable weather report, noting any relevant historical patterns."""
 
 AIRCRAFT_PROMPT = """\
 You are an aviation intelligence analyst with live ADS-B tracking.
@@ -209,6 +214,7 @@ You are a comprehensive aviation and weather assistant.
 
 Tools available:
   • lookup_airport_codes  — resolve place names → ICAO (call this first for any location)
+  • rag_search            — search historical METAR/TAF data, safety benchmarks, and past context
   • Aviation weather      — METAR, TAF, PIREPs, AIRMETs, flight categories, route/radius
   • HK weather            — HKO conditions, forecasts, warnings, visibility
   • Aircraft tracking     — ADS-B live, history, callsign/registration/area search
@@ -216,8 +222,9 @@ Tools available:
 For complex queries:
   1. Identify what data is needed
   2. Resolve location names to ICAO codes
-  3. Call each required tool in sequence
-  4. Synthesise a complete, well-structured response"""
+  3. Search historical context with rag_search for relevant past data or safety info
+  4. Call each required live data tool in sequence
+  5. Synthesise a complete, well-structured response referencing both live and historical data"""
 
 
 # Maximum ReAct steps (agent↔tools rounds) per specialist call.

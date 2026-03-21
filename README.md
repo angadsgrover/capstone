@@ -72,19 +72,18 @@ docker compose -f docker-compose.yml -f docker-compose.graph.yml up -d
 docker compose -f docker-compose.yml -f docker-compose.graph.yml --profile graph up -d
 ```
 
-## Local Development
+## Documentation
 
-See [DEVELOPMENT.md](./DEVELOPMENT.md) for:
-- Python venv setup
-- Running MCP servers locally
-- Running FastAPI + Vite dev servers in parallel
-- Testing individual components
-- Debugging LangGraph workflows
+📚 **[DOCS_GUIDE.md](./DOCS_GUIDE.md)** - Complete documentation index and guide to all project docs
 
-Deployment/setup deep dives:
-- [DOCKER_SETUP.md](./DOCKER_SETUP.md): Full Docker operations, backups, and moving to a larger drive
-- [VM_NEW_MACHINE_SETUP.md](./VM_NEW_MACHINE_SETUP.md): Cloud VM and new machine deployment playbook
-- [scripts/hko_archive_sync_ingest.py](./scripts/hko_archive_sync_ingest.py): Authenticated archive sync + incremental embedding ingest for historical benchmarking/reference
+### Quick Links
+- **Setup**: [QUICKSTART.md](./QUICKSTART.md) - One-page command reference
+- **Local Dev**: [DEVELOPMENT.md](./DEVELOPMENT.md) - Detailed local development setup
+- **Docker**: [DOCKER_SETUP.md](./DOCKER_SETUP.md) - Container operations & deployment
+- **VM Setup**: [VM_NEW_MACHINE_SETUP.md](./VM_NEW_MACHINE_SETUP.md) - Cloud VM deployment
+- **Features**: [EMBEDDINGS.md](./EMBEDDINGS.md), [CACHING.md](./CACHING.md), [MEMORY_ARCHITECTURE.md](./MEMORY_ARCHITECTURE.md)
+- **Mobile**: [MOBILE_APP.md](./MOBILE_APP.md) - React Native guide
+- **Roadmap**: [ROADMAP.md](./ROADMAP.md) - Future enhancements
 
 ## Architecture
 

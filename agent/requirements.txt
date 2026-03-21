@@ -1,27 +1,41 @@
+# Core LangChain/LangGraph
 pydantic>=2.10.6
 langgraph>=1.0.0
 langgraph-prebuilt>=1.0.0
 langchain-core>=0.3.0
 langchain-openai>=1.0.0
 langchain>=0.3.0
+
+# MCP Protocol
 mcp>=1.5.0
+fastmcp>=2.10.2
+
+# HTTP / Async
 aiohttp>=3.8.0
 httpx>=0.27.0
 httpx-sse>=0.4.0
-python-dotenv>=1.0.0
-fastmcp>=2.10.2
-rich>=13.9.4
-langfuse>=4.0.0
-aviation_weather_mcp_server
-hk_climate_mcp_server
+
+# Web Framework
 fastapi>=0.128
 uvicorn>=0.30.0
+
+# Database
 asyncpg>=0.29.0
+
+# Memory & RAG
 mem0ai>=0.1.0
 cognee>=0.1.38
 openai>=1.0.0
-apscheduler>=3.10.4
-httpx>=0.27.0
+rank-bm25>=0.2.2
+
+# Caching
 redis>=5.0.0
 hiredis>=2.3.0
-rank-bm25>=0.2.2
+
+# Observability
+langfuse>=4.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+rich>=13.9.4
+apscheduler>=3.10.4

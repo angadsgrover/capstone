@@ -6,10 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
+# Install from pyproject.toml (includes fastmcp, aiohttp)
+COPY pyproject.toml .
+COPY aviation_weather_mcp_server/ aviation_weather_mcp_server/
+RUN pip install --no-cache-dir .
 
 EXPOSE 8001
 

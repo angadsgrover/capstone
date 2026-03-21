@@ -9,17 +9,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
-import os
 import time
 from typing import Any
 
 import httpx
 from fastmcp import FastMCP
 
-# Allow bare `import db` when running server.py from the project root
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from db import setup_aircraft_db
+from ..db import setup_aircraft_db
 
 ADSB_API_BASE = "https://api.adsb.lol"
 

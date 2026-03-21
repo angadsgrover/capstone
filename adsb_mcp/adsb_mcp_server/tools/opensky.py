@@ -19,17 +19,14 @@ get_my_states tool.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
-import sys
 import time
 from typing import Any
 
 import httpx
 from fastmcp import FastMCP
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from db import setup_aircraft_db
+from ..db import setup_aircraft_db
 
 OPENSKY_BASE = "https://opensky-network.org/api"
 CACHE_TTL = 3600  # seconds
