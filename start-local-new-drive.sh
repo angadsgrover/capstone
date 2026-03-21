@@ -67,10 +67,42 @@ if [ ! -f ".env" ]; then
   fi
 fi
 
+load_dotenv_safe() {
+  local env_file="$1"
+  while IFS= read -r raw_line || [ -n "$raw_line" ]; do
+    # Trim leading/trailing whitespace
+    local line
+    line="${raw_line#${raw_line%%[![:space:]]*}}"
+    line="${line%${line##*[![:space:]]}}"
+
+    # Skip empty/comment-only lines
+    [ -z "$line" ] && continue
+    case "$line" in
+      \#*) continue ;;
+    esac
+
+    # Accept KEY=VALUE lines only
+    if ! printf '%s' "$line" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*='; then
+      continue
+    fi
+
+    local key="${line%%=*}"
+    local value="${line#*=}"
+
+    # Strip common inline comments starting with space-hash.
+    # Example: FOO=bar # comment
+    value="${value%%\ #*}"
+
+    # Trim whitespace around value after comment strip
+    value="${value#${value%%[![:space:]]*}}"
+    value="${value%${value##*[![:space:]]}}"
+
+    export "$key=$value"
+  done < "$env_file"
+}
+
 # Export variables from .env so infra checks and compose interpolation can use them.
-set -a
-source .env
-set +a
+load_dotenv_safe ".env"
 
 pick_python() {
   if command -v python3.12 >/dev/null 2>&1; then
