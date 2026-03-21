@@ -22,6 +22,7 @@ import asyncio
 import logging
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -503,8 +504,20 @@ def main():
 
     # Handle Docker mode
     if args.docker:
-        logger.info("🐳 Starting services with Docker Compose...")
-        cmd = ["docker", "compose", "up", "-d"]
+        docker_bin = shutil.which("docker")
+        podman_bin = shutil.which("podman")
+
+        if docker_bin:
+            compose = [docker_bin, "compose"]
+            logger.info("🐳 Starting services with Docker Compose...")
+        elif podman_bin:
+            compose = [podman_bin, "compose"]
+            logger.info("🦭 Starting services with Podman Compose...")
+        else:
+            logger.error("❌ Neither docker nor podman was found in PATH")
+            sys.exit(1)
+
+        cmd = [*compose, "up", "-d"]
 
         if args.test:
             cmd.remove("-d")  # Run in foreground for tests

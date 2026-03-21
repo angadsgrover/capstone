@@ -147,6 +147,8 @@ bash ./start-local-new-drive.sh --with-infra
 bash ./start-local-new-drive.sh --with-graph
 ```
 
+If Docker CLI is unavailable, the bootstrap script automatically falls back to `podman compose`.
+
 This script creates a shared root `.venv`, installs all Python/frontend dependencies once, and starts the local stack.
 It requires Python 3.12 or 3.13 (3.14 may fail on dependency constraints).
 

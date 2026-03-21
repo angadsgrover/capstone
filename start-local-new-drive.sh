@@ -28,13 +28,26 @@ for arg in "$@"; do
   esac
 done
 
+pick_compose() {
+  if command -v docker >/dev/null 2>&1; then
+    echo "docker compose"
+    return
+  fi
+  if command -v podman >/dev/null 2>&1; then
+    echo "podman compose"
+    return
+  fi
+  echo ""
+}
+
 if ! command -v npm >/dev/null 2>&1; then
   echo "Error: npm not found. Install Node.js first."
   exit 1
 fi
 
-if $WITH_INFRA && ! command -v docker >/dev/null 2>&1; then
-  echo "Error: docker not found. Install Docker or run without --with-infra."
+COMPOSE_CMD="$(pick_compose)"
+if $WITH_INFRA && [ -z "$COMPOSE_CMD" ]; then
+  echo "Error: neither docker nor podman was found. Install one, or run without --with-infra."
   exit 1
 fi
 
@@ -53,6 +66,11 @@ if [ ! -f ".env" ]; then
     exit 1
   fi
 fi
+
+# Export variables from .env so infra checks and compose interpolation can use them.
+set -a
+source .env
+set +a
 
 pick_python() {
   if command -v python3.12 >/dev/null 2>&1; then
@@ -136,10 +154,11 @@ start_infra_if_requested() {
     return
   fi
 
-  echo "Starting local infrastructure with Docker (Postgres + Redis${WITH_GRAPH:+ + Neo4j})..."
+  echo "Starting local infrastructure with compose (Postgres + Redis${WITH_GRAPH:+ + Neo4j})..."
+  echo "Compose engine: $COMPOSE_CMD"
 
   if [ -z "${POSTGRES_PASSWORD:-}" ]; then
-    echo "Error: POSTGRES_PASSWORD is not set in environment/.env (required for docker compose postgres)."
+    echo "Error: POSTGRES_PASSWORD is not set in environment/.env (required for compose postgres)."
     exit 1
   fi
 
@@ -149,9 +168,9 @@ start_infra_if_requested() {
   fi
 
   if $WITH_GRAPH; then
-    docker compose --profile graph up -d postgres redis neo4j
+    $COMPOSE_CMD --profile graph up -d postgres redis neo4j
   else
-    docker compose up -d postgres redis
+    $COMPOSE_CMD up -d postgres redis
   fi
 }
 

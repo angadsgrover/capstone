@@ -2,6 +2,8 @@
 
 ## Docker (Recommended for First Time)
 
+Note: `docker compose` also works when Docker CLI is backed by Podman on your machine.
+
 ```bash
 cp .env.example .env
 # Edit .env: fill LLM_API_KEY, POSTGRES_PASSWORD, BASE_URL, MODEL_CHOICE
@@ -39,6 +41,8 @@ bash ./start-local-new-drive.sh --with-infra
 
 # Full local mode with graph infra (Postgres + Redis + Neo4j)
 bash ./start-local-new-drive.sh --with-graph
+
+# If Docker CLI is unavailable, script auto-falls back to `podman compose`
 
 # Start all services (MCP servers + agent + frontend)
 ./start.sh
