@@ -223,13 +223,29 @@ class HealthChecker:
         url = f"http://localhost:{port}/sse"
 
         async with httpx.AsyncClient() as client:
-            # Test connection (HEAD or GET with short timeout)
-            response = await client.get(url, timeout=3.0, follow_redirects=True)
+            # SSE endpoints intentionally keep connections open. We only validate
+            # handshake (status code + content-type) and do not wait for body EOF.
+            try:
+                async with client.stream("GET", url, timeout=3.0, follow_redirects=True) as response:
+                    if response.status_code >= 500:
+                        raise RuntimeError(f"Server error: {response.status_code}")
 
-            if response.status_code >= 500:
-                raise RuntimeError(f"Server error: {response.status_code}")
+                    content_type = (response.headers.get("content-type") or "").lower()
+                    is_sse = "text/event-stream" in content_type
 
-            return {"message": f"Responding on port {port}", "port": port, "url": url}
+                    if not is_sse:
+                        raise RuntimeError(
+                            f"Unexpected content-type '{content_type or 'unknown'}' (expected text/event-stream)"
+                        )
+
+                    return {
+                        "message": f"Responding on port {port} (SSE)",
+                        "port": port,
+                        "url": url,
+                        "content_type": content_type,
+                    }
+            except httpx.TimeoutException as e:
+                raise RuntimeError(f"Timeout connecting to {url}: {e!r}") from e
 
     # ── Agent Server ──────────────────────────────────────────────────────────
 

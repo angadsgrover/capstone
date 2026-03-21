@@ -9,8 +9,32 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd "$ROOT_DIR"
 
+WITH_INFRA=false
+WITH_GRAPH=false
+PASSTHROUGH_ARGS=()
+
+for arg in "$@"; do
+  case "$arg" in
+    --with-infra)
+      WITH_INFRA=true
+      ;;
+    --with-graph)
+      WITH_INFRA=true
+      WITH_GRAPH=true
+      ;;
+    *)
+      PASSTHROUGH_ARGS+=("$arg")
+      ;;
+  esac
+done
+
 if ! command -v npm >/dev/null 2>&1; then
   echo "Error: npm not found. Install Node.js first."
+  exit 1
+fi
+
+if $WITH_INFRA && ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker not found. Install Docker or run without --with-infra."
   exit 1
 fi
 
@@ -107,8 +131,33 @@ setup_frontend() {
   (cd frontend-app && npm ci)
 }
 
+start_infra_if_requested() {
+  if ! $WITH_INFRA; then
+    return
+  fi
+
+  echo "Starting local infrastructure with Docker (Postgres + Redis${WITH_GRAPH:+ + Neo4j})..."
+
+  if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+    echo "Error: POSTGRES_PASSWORD is not set in environment/.env (required for docker compose postgres)."
+    exit 1
+  fi
+
+  if $WITH_GRAPH && [ -z "${NEO4J_PASSWORD:-}" ]; then
+    echo "Error: NEO4J_PASSWORD is not set in environment/.env (required for --with-graph)."
+    exit 1
+  fi
+
+  if $WITH_GRAPH; then
+    docker compose --profile graph up -d postgres redis neo4j
+  else
+    docker compose up -d postgres redis
+  fi
+}
+
 setup_shared_python_env
 setup_frontend
+start_infra_if_requested
 
 echo "Bootstrap complete. Starting local stack..."
-exec ./start.sh "$@"
+exec ./start.sh "${PASSTHROUGH_ARGS[@]}"

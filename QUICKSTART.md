@@ -34,6 +34,12 @@ cp .env.example .env
 # One-time local bootstrap (shared .venv + deps)
 bash ./start-local-new-drive.sh --check
 
+# Full local mode with infrastructure (Postgres + Redis)
+bash ./start-local-new-drive.sh --with-infra
+
+# Full local mode with graph infra (Postgres + Redis + Neo4j)
+bash ./start-local-new-drive.sh --with-graph
+
 # Start all services (MCP servers + agent + frontend)
 ./start.sh
 

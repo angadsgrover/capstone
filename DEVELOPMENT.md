@@ -137,6 +137,16 @@ bash ./start-local-new-drive.sh --check
 bash ./start-local-new-drive.sh --test
 ```
 
+Infrastructure flags:
+
+```bash
+# Start local app + Postgres + Redis via Docker
+bash ./start-local-new-drive.sh --with-infra
+
+# Start local app + Postgres + Redis + Neo4j via Docker
+bash ./start-local-new-drive.sh --with-graph
+```
+
 This script creates a shared root `.venv`, installs all Python/frontend dependencies once, and starts the local stack.
 It requires Python 3.12 or 3.13 (3.14 may fail on dependency constraints).
 
