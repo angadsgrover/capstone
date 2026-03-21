@@ -41,7 +41,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "agent"))
 
 from db import Database  # type: ignore
-from ingestion.embedder import embed_and_store  # type: ignore
+from ingestion.embedder import embed_and_store, embed_text  # type: ignore
 
 LINK_RE = re.compile(r'href="([^"]+)"', re.IGNORECASE)
 TS_RE = re.compile(r"_(\d{14})\.xml\.gz$", re.IGNORECASE)
@@ -224,6 +224,15 @@ async def ingest_files(cfg: SyncConfig, state: StateStore) -> int:
 
     if not db.available:
         raise RuntimeError("POSTGRES_DSN is not configured or DB is unavailable; cannot ingest embeddings.")
+
+    # Fail fast on embedding provider misconfiguration instead of noisy per-file failures.
+    try:
+        _ = await embed_text("embedding preflight")
+    except Exception as exc:
+        raise RuntimeError(
+            "Embedding preflight failed. Please verify EMBED_BASE_URL/EMBED_API_KEY/EMBED_MODEL in .env. "
+            f"Provider error: {exc}"
+        ) from exc
 
     total = 0
     per_category_limit = max(1, cfg.ingest_limit)
