@@ -225,6 +225,46 @@ async def ingest_files(cfg: SyncConfig, state: StateStore) -> int:
     if not db.available:
         raise RuntimeError("POSTGRES_DSN is not configured or DB is unavailable; cannot ingest embeddings.")
 
+    table_exists = await db._pool.fetchval(  # type: ignore[union-attr]
+        "SELECT to_regclass('public.embeddings') IS NOT NULL"
+    )
+    if not table_exists:
+        # Minimal auto-bootstrap for embedding-only ingest path.
+        try:
+            await db._pool.execute("CREATE EXTENSION IF NOT EXISTS vector")  # type: ignore[union-attr]
+            await db._pool.execute(  # type: ignore[union-attr]
+                """
+                CREATE TABLE IF NOT EXISTS embeddings (
+                    id BIGSERIAL PRIMARY KEY,
+                    source_type TEXT NOT NULL,
+                    source_id BIGINT,
+                    content TEXT NOT NULL,
+                    embedding vector(1536),
+                    metadata JSONB,
+                    created_at TIMESTAMPTZ DEFAULT now()
+                )
+                """
+            )
+            await db._pool.execute(  # type: ignore[union-attr]
+                "CREATE INDEX IF NOT EXISTS idx_embeddings_hnsw ON embeddings USING hnsw (embedding vector_cosine_ops)"
+            )
+            await db._pool.execute(  # type: ignore[union-attr]
+                "CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings (source_type, created_at DESC)"
+            )
+            table_exists = await db._pool.fetchval(  # type: ignore[union-attr]
+                "SELECT to_regclass('public.embeddings') IS NOT NULL"
+            )
+        except Exception:
+            table_exists = False
+
+        if not table_exists:
+            raise RuntimeError(
+                "Database schema is not initialized (missing 'embeddings' table).\n"
+                "Initialize schema with one of:\n"
+                "- psql -d capstone -f infra/init.sql\n"
+                "- docker compose -f docker-compose.yml -f docker-compose.local-infra.yml exec -T postgres psql -U capstone -d capstone < infra/init.sql"
+            )
+
     # Fail fast on embedding provider misconfiguration instead of noisy per-file failures.
     try:
         _ = await embed_text("embedding preflight")
@@ -246,10 +286,16 @@ async def ingest_files(cfg: SyncConfig, state: StateStore) -> int:
     try:
         for category in cfg.ingest_categories:
             source_type = source_type_map.get(category, category.lower())
-            files = sorted((cfg.target_dir / category).glob("*.xml.gz"))
+            files = [
+                p
+                for p in sorted((cfg.target_dir / category).glob("*.xml.gz"))
+                if not p.name.startswith("._") and p.is_file()
+            ]
             count = 0
             attempts = 0
             failed = 0
+
+            print(f"[ingest] category={category} files={len(files)} limit={per_category_limit}")
 
             for file_path in files:
                 if attempts >= per_category_limit:
@@ -305,6 +351,8 @@ async def ingest_files(cfg: SyncConfig, state: StateStore) -> int:
 
                 if count >= per_category_limit:
                     break
+
+            print(f"[ingest] category={category} attempts={attempts} success={count} failed={failed}")
     finally:
         await db.close()
 

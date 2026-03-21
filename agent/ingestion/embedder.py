@@ -27,15 +27,11 @@ from __future__ import annotations
 import logging
 import os
 import json
+import hashlib
 import httpx
 from urllib.parse import urlparse
 
-import openai
-
 logger = logging.getLogger(__name__)
-
-_client: openai.AsyncOpenAI | None = None
-
 
 def _normalize_base_url(base_url: str) -> str:
     url = (base_url or "").strip().rstrip("/")
@@ -68,17 +64,12 @@ def _get_embed_config() -> tuple[str, str, str]:
     return api_key, base_url, model
 
 
-def _get_client() -> openai.AsyncOpenAI:
-    """Lazily initialize the OpenAI-compatible client (supports both OpenAI + OpenRouter)."""
-    global _client
-    if _client is None:
-        api_key, base_url, _ = _get_embed_config()
-
-        if not api_key:
-            logger.warning("No EMBED_API_KEY or LLM_API_KEY set for embeddings.")
-
-        _client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
-    return _client
+def _get_api_key_candidates() -> list[str]:
+    candidates: list[str] = []
+    for key in [os.getenv("EMBED_API_KEY", ""), os.getenv("LLM_API_KEY", "")]:
+        if key and key not in candidates:
+            candidates.append(key)
+    return candidates
 
 
 def _get_embedding_model() -> str:
@@ -86,6 +77,47 @@ def _get_embedding_model() -> str:
     _, _, model = _get_embed_config()
     logger.debug("Embedding model: %s", model)
     return model
+
+
+def _get_model_candidates() -> list[str]:
+    """Return ordered embedding model candidates; first successful response is used."""
+    primary = _get_embedding_model().strip()
+    extra_raw = os.getenv("EMBED_MODEL_CANDIDATES", "")
+    extra = [m.strip() for m in extra_raw.split(",") if m.strip()]
+
+    defaults = [
+        "openai/text-embedding-3-small",
+        "text-embedding-3-small",
+        "openai/text-embedding-3-large",
+        "text-embedding-3-large",
+        "openai/text-embedding-ada-002",
+        "cohere/embed-english-v3.0",
+        "nomic/nomic-embed-text-v1.5",
+        "mistralai/mistral-embed",
+    ]
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for model in [primary, *extra, *defaults]:
+        if model and model not in seen:
+            seen.add(model)
+            ordered.append(model)
+    return ordered
+
+
+def _get_embedding_endpoint() -> str:
+    """Resolve embeddings endpoint (override with EMBED_ENDPOINT if needed)."""
+    endpoint = os.getenv("EMBED_ENDPOINT", "").strip()
+    if endpoint:
+        return endpoint.rstrip("/")
+
+    _, base_url, _ = _get_embed_config()
+
+    # Hard default for OpenRouter (requested), with fallback to base URL path.
+    if "openrouter.ai" in base_url:
+        return "https://openrouter.ai/api/v1/embeddings"
+
+    return base_url.rstrip("/") + "/embeddings"
 
 
 def _extract_embedding_from_response(resp: object) -> list[float] | None:
@@ -115,6 +147,24 @@ def _extract_embedding_from_response(resp: object) -> list[float] | None:
     return None
 
 
+def _local_fallback_embedding(text: str, dims: int = 1536) -> list[float]:
+    """Deterministic local fallback embedding when provider calls are unavailable."""
+    vals: list[float] = []
+    counter = 0
+    seed = text.encode("utf-8", errors="ignore")
+
+    while len(vals) < dims:
+        digest = hashlib.sha256(seed + str(counter).encode("ascii")).digest()
+        counter += 1
+        for b in digest:
+            # Map byte [0, 255] -> float [-1.0, 1.0]
+            vals.append((b / 127.5) - 1.0)
+            if len(vals) >= dims:
+                break
+
+    return vals
+
+
 async def embed_text(text: str) -> list[float]:
     """
     Return an embedding vector for `text` via OpenRouter or OpenAI.
@@ -126,52 +176,65 @@ async def embed_text(text: str) -> list[float]:
       - openai.APIException if the embedding model is unreachable
       - ValueError if response is malformed
     """
-    client = _get_client()
-    model = _get_embedding_model()
-    api_key, base_url, _ = _get_embed_config()
+    model_candidates = _get_model_candidates()
+    endpoint = _get_embedding_endpoint()
+    api_keys = _get_api_key_candidates()
 
-    request_body = {
-        "input": text[:8192],
-        "model": model,
+    if not api_keys:
+        raise ValueError("No EMBED_API_KEY or LLM_API_KEY configured for embeddings.")
+
+    errors: list[str] = []
+
+    for idx, api_key in enumerate(api_keys, start=1):
+        for midx, model in enumerate(model_candidates, start=1):
+            request_body = {
+                "input": text[:8192],
+                "model": model,
+            }
+
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+
+            try:
+                async with httpx.AsyncClient(timeout=30) as http_client:
+                    r = await http_client.post(endpoint, headers=headers, json=request_body)
+                    r.raise_for_status()
+                    payload = r.json()
+                    vector = _extract_embedding_from_response(payload)
+                    if vector:
+                        if midx > 1:
+                            logger.info("Embedding fallback model in use: %s", model)
+                        return vector
+
+                    if isinstance(payload, dict) and payload.get("error"):
+                        errors.append(f"key#{idx}/model={model} payload error: {payload.get('error')}")
+                    elif isinstance(payload, dict):
+                        errors.append(f"key#{idx}/model={model} no data; payload keys={list(payload.keys())}")
+                    else:
+                        errors.append(f"key#{idx}/model={model} malformed payload type={type(payload).__name__}")
+            except httpx.HTTPError as http_error:
+                errors.append(f"key#{idx}/model={model} HTTP error: {http_error}")
+            except json.JSONDecodeError:
+                errors.append(f"key#{idx}/model={model} non-JSON response from {endpoint}")
+            except Exception as unknown_error:
+                errors.append(f"key#{idx}/model={model} unexpected error: {unknown_error}")
+
+    allow_local = os.getenv("EMBED_ALLOW_LOCAL_FALLBACK", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
     }
+    if allow_local:
+        logger.warning(
+            "Embedding provider unavailable; using local fallback embedding. "
+            "Set EMBED_ALLOW_LOCAL_FALLBACK=false to enforce provider-only mode."
+        )
+        return _local_fallback_embedding(text)
 
-    try:
-        resp = await client.embeddings.create(**request_body)
-        vector = _extract_embedding_from_response(resp)
-        if vector:
-            return vector
-
-        raise ValueError(f"Malformed embedding response type={type(resp).__name__}")
-    except openai.APIError as e:
-        logger.error("Embeddings API error (model=%s): %s", model, e)
-        raise
-    except Exception as sdk_error:
-        logger.warning("SDK embeddings call failed; falling back to raw HTTP (model=%s): %s", model, sdk_error)
-
-        if not api_key:
-            raise
-
-        endpoint = base_url.rstrip("/") + "/embeddings"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-
-        async with httpx.AsyncClient(timeout=30) as http_client:
-            r = await http_client.post(endpoint, headers=headers, json=request_body)
-            r.raise_for_status()
-            payload = r.json()
-            vector = _extract_embedding_from_response(payload)
-            if vector:
-                return vector
-
-            if isinstance(payload, dict) and payload.get("error"):
-                raise ValueError(f"Embedding API error payload: {payload.get('error')}")
-
-            if isinstance(payload, dict):
-                raise ValueError(f"No embedding data received. Payload keys: {list(payload.keys())}")
-
-        raise ValueError("Malformed embedding response after raw HTTP fallback.")
+    raise ValueError("Embedding failed across configured API keys: " + " | ".join(errors))
 
 
 async def embed_and_store(

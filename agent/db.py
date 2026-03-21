@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 from typing import Any
 
 import asyncpg
@@ -116,6 +117,9 @@ class Database:
         """Insert a pre-computed embedding; returns the new row id."""
         if not self._pool:
             return -1
+        # asyncpg does not bind Python lists directly to pgvector; pass literal text.
+        embedding_literal = "[" + ",".join(str(float(x)) for x in embedding) + "]"
+        metadata_json = json.dumps(metadata) if metadata is not None else None
         row = await self._pool.fetchrow(
             """
             INSERT INTO embeddings (source_type, source_id, content, embedding, metadata)
@@ -125,8 +129,8 @@ class Database:
             source_type,
             source_id,
             content,
-            embedding,
-            metadata,
+            embedding_literal,
+            metadata_json,
         )
         return row["id"]
 
