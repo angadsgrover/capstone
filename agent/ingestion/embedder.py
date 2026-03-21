@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 
 import openai
 
@@ -74,9 +75,31 @@ async def embed_text(text: str) -> list[float]:
             input=text[:8192],  # Truncate to avoid context limits
             model=model,
         )
-        if not resp.data or not resp.data[0].embedding:
-            raise ValueError("Empty embedding response from API.")
-        return resp.data[0].embedding
+
+        # Typical OpenAI Python SDK shape (Pydantic object)
+        if hasattr(resp, "data") and getattr(resp, "data"):
+            first = resp.data[0]
+            if hasattr(first, "embedding") and first.embedding:
+                return first.embedding
+
+        # Some compatible gateways may return dict-like payloads.
+        if isinstance(resp, dict):
+            data = resp.get("data") or []
+            if data and isinstance(data[0], dict) and data[0].get("embedding"):
+                return data[0]["embedding"]
+
+        # Defensive fallback if a proxy/client returned a JSON string.
+        if isinstance(resp, str):
+            try:
+                payload = json.loads(resp)
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                data = payload.get("data") or []
+                if data and isinstance(data[0], dict) and data[0].get("embedding"):
+                    return data[0]["embedding"]
+
+        raise ValueError(f"Malformed embedding response type={type(resp).__name__}")
     except openai.APIError as e:
         logger.error("Embeddings API error (model=%s): %s", model, e)
         raise

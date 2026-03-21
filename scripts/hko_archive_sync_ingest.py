@@ -27,6 +27,7 @@ import gzip
 import json
 import os
 import re
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -193,7 +194,34 @@ async def sync_category(
 
 async def ingest_files(cfg: SyncConfig, state: StateStore) -> int:
     db = Database()
-    await db.connect()
+    try:
+        await db.connect()
+    except Exception as exc:
+        msg = str(exc)
+        if "role" in msg and "does not exist" in msg:
+            dsn = os.getenv("POSTGRES_DSN", "")
+            dsn_user = "<unknown>"
+            if dsn:
+                try:
+                    parsed = urlparse(dsn)
+                    if parsed.username:
+                        dsn_user = parsed.username
+                except Exception:
+                    pass
+
+            raise RuntimeError(
+                "PostgreSQL user from POSTGRES_DSN does not exist. "
+                f"Detected DSN user: {dsn_user}.\n\n"
+                "Fix options:\n"
+                "1) Update POSTGRES_DSN in .env to an existing DB user.\n"
+                "2) Or create the missing role/database inside the running postgres container:\n"
+                "   docker compose -f docker-compose.yml -f docker-compose.local-infra.yml exec -T postgres psql -U postgres -d postgres -c \"CREATE ROLE capstone WITH LOGIN PASSWORD 'your_password';\"\n"
+                "   docker compose -f docker-compose.yml -f docker-compose.local-infra.yml exec -T postgres psql -U postgres -d postgres -c \"CREATE DATABASE capstone OWNER capstone;\"\n"
+                "   docker compose -f docker-compose.yml -f docker-compose.local-infra.yml exec -T postgres psql -U postgres -d capstone < infra/init.sql\n"
+                "3) If this is disposable local data, reset infra volume and restart with --with-infra."
+            ) from exc
+        raise
+
     if not db.available:
         raise RuntimeError("POSTGRES_DSN is not configured or DB is unavailable; cannot ingest embeddings.")
 
@@ -236,12 +264,17 @@ async def ingest_files(cfg: SyncConfig, state: StateStore) -> int:
                     "local_path": str(file_path),
                 }
 
-                await embed_and_store(
+                row_id = await embed_and_store(
                     db=db,
                     source_type=source_type,
                     content=content,
                     metadata=metadata,
                 )
+
+                # Keep failed items retriable in later runs.
+                if row_id == -1:
+                    continue
+
                 state.mark_ingested(rel, source_type)
                 total += 1
                 count += 1
@@ -285,7 +318,7 @@ def build_config(args: argparse.Namespace) -> SyncConfig:
 
     user = args.user or os.getenv("HKO_ARCHIVE_USER", "")
     password = args.password or os.getenv("HKO_ARCHIVE_PASS", "")
-    if not user or not password:
+    if (not args.skip_download) and (not user or not password):
         raise SystemExit("Missing credentials. Set HKO_ARCHIVE_USER/HKO_ARCHIVE_PASS or pass --user/--password.")
 
     allowed = {"METAR", "TAF", "SPECI", "ADS_B"}
