@@ -125,6 +125,120 @@ npm run dev
 
 ---
 
+## Run Without Docker From a New Drive (Same Machine)
+
+Use this when you want to move the project to a larger internal/external drive and run everything natively.
+
+### Fast path (single command)
+
+```bash
+bash ./start-local-new-drive.sh
+```
+
+Optional flags pass through to `start.sh`:
+
+```bash
+bash ./start-local-new-drive.sh --no-frontend
+bash ./start-local-new-drive.sh --check
+bash ./start-local-new-drive.sh --test
+```
+
+This script creates missing virtual environments, installs Python/frontend dependencies, and starts the local stack.
+
+### 1. Clone on the new drive
+
+```bash
+cd /Volumes/YourNewDrive
+git clone <your-repo-url> capstone
+cd capstone
+cp .env.example .env
+```
+
+### 2. Install frontend dependencies
+
+```bash
+cd frontend-app
+npm ci
+cd ..
+```
+
+### 3. Create Python virtual environments for each service
+
+```bash
+python3.12 -m venv agent/.venv
+python3.12 -m venv aviation-weather-mcp-python/.venv
+python3.12 -m venv hk-climate-mcp-server-python/.venv
+python3.12 -m venv adsb_mcp/.venv
+```
+
+### 4. Install Python dependencies
+
+```bash
+source agent/.venv/bin/activate
+pip install -r agent/requirements.txt
+deactivate
+
+source aviation-weather-mcp-python/.venv/bin/activate
+pip install -e aviation-weather-mcp-python
+deactivate
+
+source hk-climate-mcp-server-python/.venv/bin/activate
+pip install -e hk-climate-mcp-server-python
+deactivate
+
+source adsb_mcp/.venv/bin/activate
+pip install -e adsb_mcp
+deactivate
+```
+
+### 5. Configure `.env` for local (non-Docker) runtime
+
+Set these values in root `.env`:
+
+```bash
+LLM_API_KEY=sk-...
+BASE_URL=https://openrouter.ai/api/v1
+MODEL_CHOICE=qwen/qwen3-8b
+
+# Local PostgreSQL DSN (update user/password/port to your local setup)
+POSTGRES_DSN=postgresql://capstone:<password>@localhost:5432/capstone
+
+# Optional long-term graph memory
+COGNEE_ENABLED=true
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=<neo4j-password>
+```
+
+### 6. Start services without Docker
+
+Recommended (single command):
+
+```bash
+./start.sh
+```
+
+Or API-only:
+
+```bash
+./start.sh --no-frontend
+```
+
+### 7. Validate
+
+```bash
+curl -s http://localhost:8000/docs > /dev/null && echo "API OK"
+curl -s http://localhost:5173 > /dev/null && echo "Frontend OK"
+```
+
+### 8. Common new-drive issues
+
+- If external drive path contains spaces, quote paths in commands.
+- If venv Python points to old path, recreate that `.venv` on the new drive.
+- On macOS, allow terminal access to external volumes if permission prompts appear.
+
+---
+
 ## Testing
 
 ### Unit Tests (Local)
