@@ -179,3 +179,5 @@ cd agent && python -m pytest tools/ -v
 For detailed guides, see:
 - **Setup**: [README.md](./README.md)
 - **Development**: [DEVELOPMENT.md](./DEVELOPMENT.md)
+- **Docker + Storage Migration**: [DOCKER_SETUP.md](./DOCKER_SETUP.md)
+- **VM / New Machine Deployment**: [VM_NEW_MACHINE_SETUP.md](./VM_NEW_MACHINE_SETUP.md)

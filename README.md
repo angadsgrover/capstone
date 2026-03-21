@@ -78,6 +78,10 @@ See [DEVELOPMENT.md](./DEVELOPMENT.md) for:
 - Testing individual components
 - Debugging LangGraph workflows
 
+Deployment/setup deep dives:
+- [DOCKER_SETUP.md](./DOCKER_SETUP.md): Full Docker operations, backups, and moving to a larger drive
+- [VM_NEW_MACHINE_SETUP.md](./VM_NEW_MACHINE_SETUP.md): Cloud VM and new machine deployment playbook
+
 ## Architecture
 
 ```

@@ -1,0 +1,342 @@
+# Docker Setup and Operations Guide
+
+This guide is the complete Docker-based setup for this project, including:
+- First-time local setup
+- Day-to-day operations
+- Moving data to a larger drive
+- Backup and restore
+
+---
+
+## 1. Prerequisites
+
+- Docker Desktop 4.25+ (macOS/Windows) or Docker Engine 24+ (Linux)
+- Docker Compose v2 (`docker compose version`)
+- Git
+- A valid LLM provider key (OpenRouter/OpenAI/etc.)
+
+Check your installation:
+
+```bash
+docker --version
+docker compose version
+```
+
+---
+
+## 2. First-Time Setup
+
+### 2.1 Clone and configure environment
+
+```bash
+git clone <your-repo-url>
+cd capstone
+cp .env.example .env
+```
+
+Edit `.env` and set at least:
+
+```bash
+LLM_API_KEY=sk-...
+BASE_URL=https://openrouter.ai/api/v1
+MODEL_CHOICE=qwen/qwen3-8b
+POSTGRES_PASSWORD=change_to_a_strong_password
+```
+
+### 2.2 Start the core stack
+
+```bash
+docker compose up -d
+```
+
+Services started:
+- `postgres` (pgvector)
+- `redis`
+- `mcp-aviation-wx`
+- `mcp-hk-climate`
+- `mcp-adsb`
+- `agent`
+- `frontend`
+
+### 2.3 Verify startup
+
+```bash
+docker compose ps
+docker compose logs -f agent
+```
+
+Open:
+- Frontend: `http://localhost:80`
+- API docs: `http://localhost:8000/docs`
+
+Optional Adminer (DB UI):
+
+```bash
+docker compose --profile dev up -d
+```
+
+Then open `http://localhost:8080`.
+
+---
+
+## 3. Daily Operations
+
+Start:
+
+```bash
+docker compose up -d
+```
+
+Stop (keep data):
+
+```bash
+docker compose down
+```
+
+Stop and remove all persistent data:
+
+```bash
+docker compose down -v
+```
+
+View logs:
+
+```bash
+docker compose logs -f agent
+docker compose logs -f frontend
+docker compose logs -f postgres
+```
+
+Rebuild services after code/dependency changes:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+Hard rebuild (no layer cache):
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+---
+
+## 4. Optional Graph Setup (Apache AGE + Neo4j)
+
+If you want graph features:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.graph.yml build postgres
+docker compose -f docker-compose.yml -f docker-compose.graph.yml up -d
+```
+
+To also run Neo4j profile:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.graph.yml --profile graph up -d
+```
+
+---
+
+## 5. Running on a Larger Drive
+
+You have two valid approaches.
+
+## Option A (Recommended on macOS): Move Docker Desktop data root
+
+This moves all Docker images, layers, containers, and volumes to a larger disk.
+
+1. Open Docker Desktop
+2. Go to Settings -> Resources -> Advanced
+3. Change Disk image location to your larger drive (for example `/Volumes/ExternalSSD/docker-data`)
+4. Apply and restart Docker Desktop
+
+Pros:
+- Easiest long-term management
+- No compose changes
+
+Cons:
+- Moves all Docker workloads, not just this project
+
+## Option B (Per-project): Use bind mounts on an external drive
+
+This keeps only this project's database/cache data on the bigger drive.
+
+### 5.1 Create host directories on larger drive
+
+```bash
+mkdir -p /Volumes/ExternalSSD/capstone-data/postgres
+mkdir -p /Volumes/ExternalSSD/capstone-data/redis
+mkdir -p /Volumes/ExternalSSD/capstone-data/neo4j
+```
+
+### 5.2 Create an override compose file
+
+Create `docker-compose.storage.yml` in repo root:
+
+```yaml
+services:
+  postgres:
+    volumes:
+      - ${DATA_ROOT}/postgres:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  redis:
+    volumes:
+      - ${DATA_ROOT}/redis:/data
+
+  neo4j:
+    volumes:
+      - ${DATA_ROOT}/neo4j:/data
+```
+
+### 5.3 Set `DATA_ROOT`
+
+Add to `.env`:
+
+```bash
+DATA_ROOT=/Volumes/ExternalSSD/capstone-data
+```
+
+### 5.4 Start with override file
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.storage.yml up -d
+```
+
+Notes:
+- Keep using both files for all future commands.
+- Ensure your external drive is mounted before startup.
+
+---
+
+## 6. Migrating Existing Data to the Larger Drive
+
+If your project already has data in named volumes (`pgdata`, `redisdata`, `neo4jdata`), do this once.
+
+### 6.1 Stop stack
+
+```bash
+docker compose down
+```
+
+### 6.2 Copy PostgreSQL volume to external drive
+
+```bash
+docker run --rm \
+  -v capstone_pgdata:/from \
+  -v /Volumes/ExternalSSD/capstone-data/postgres:/to \
+  alpine sh -c "cd /from && cp -av . /to"
+```
+
+### 6.3 Copy Redis volume
+
+```bash
+docker run --rm \
+  -v capstone_redisdata:/from \
+  -v /Volumes/ExternalSSD/capstone-data/redis:/to \
+  alpine sh -c "cd /from && cp -av . /to"
+```
+
+### 6.4 Copy Neo4j volume (if used)
+
+```bash
+docker run --rm \
+  -v capstone_neo4jdata:/from \
+  -v /Volumes/ExternalSSD/capstone-data/neo4j:/to \
+  alpine sh -c "cd /from && cp -av . /to"
+```
+
+### 6.5 Start using storage override
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.storage.yml up -d
+```
+
+---
+
+## 7. Backup and Restore
+
+## Backup
+
+```bash
+mkdir -p backups
+
+docker run --rm \
+  -v capstone_pgdata:/source \
+  -v "$PWD/backups:/backup" \
+  alpine sh -c "cd /source && tar czf /backup/pgdata_$(date +%F).tar.gz ."
+```
+
+Optional Redis backup:
+
+```bash
+docker run --rm \
+  -v capstone_redisdata:/source \
+  -v "$PWD/backups:/backup" \
+  alpine sh -c "cd /source && tar czf /backup/redisdata_$(date +%F).tar.gz ."
+```
+
+## Restore
+
+1. Stop stack: `docker compose down`
+2. Restore archive into volume:
+
+```bash
+docker run --rm \
+  -v capstone_pgdata:/target \
+  -v "$PWD/backups:/backup" \
+  alpine sh -c "cd /target && rm -rf ./* && tar xzf /backup/pgdata_YYYY-MM-DD.tar.gz -C /target"
+```
+
+3. Start stack: `docker compose up -d`
+
+---
+
+## 8. Troubleshooting
+
+### Containers keep restarting
+
+```bash
+docker compose ps
+docker compose logs --tail=200 agent
+docker compose logs --tail=200 postgres
+```
+
+### API works but UI cannot connect
+
+Check `frontend` and `agent` both are healthy:
+
+```bash
+docker compose ps
+docker compose logs --tail=200 frontend
+```
+
+### Database auth errors
+
+- Verify `POSTGRES_PASSWORD` in `.env`
+- If password changed after initial DB creation, recreate DB volume:
+
+```bash
+docker compose down -v
+docker compose up -d
+```
+
+Warning: `down -v` deletes persistent data.
+
+### External drive setup fails on macOS
+
+- Verify disk is mounted at the same path each boot
+- Confirm Docker Desktop has file access permissions for that mount path
+- Use Option A if bind mount permissions are inconsistent
+
+---
+
+## 9. Recommended Team Workflow
+
+- Use default `docker compose up -d` for most developers
+- Use external-drive setup only for machines with limited internal storage
+- Keep one standard `.env` template in team docs (without secrets)
+- Run regular PostgreSQL volume backups for shared environments
