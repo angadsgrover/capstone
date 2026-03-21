@@ -1,10 +1,13 @@
 # Docker Setup and Operations Guide
 
 This guide is the complete Docker-based setup for this project, including:
+
 - First-time local setup
 - Day-to-day operations
 - Moving data to a larger drive
 - Backup and restore
+
+If you want the full stack (Langfuse + cognee + Neo4j + Apache AGE), jump to section 2.4.
 
 ---
 
@@ -50,6 +53,7 @@ docker compose up -d
 ```
 
 Services started:
+
 - `postgres` (pgvector)
 - `redis`
 - `mcp-aviation-wx`
@@ -66,6 +70,7 @@ docker compose logs -f agent
 ```
 
 Open:
+
 - Frontend: `http://localhost:80`
 - API docs: `http://localhost:8000/docs`
 
@@ -76,6 +81,76 @@ docker compose --profile dev up -d
 ```
 
 Then open `http://localhost:8080`.
+
+### 2.4 Full Stack Setup (Langfuse + cognee + Neo4j + Apache AGE)
+
+Use this when you want all optional capabilities enabled.
+
+1. Pull latest code:
+
+```bash
+git pull
+```
+
+1. Configure `.env` with required and optional full-stack variables:
+
+```bash
+# Required
+LLM_API_KEY=sk-...
+BASE_URL=https://openrouter.ai/api/v1
+MODEL_CHOICE=qwen/qwen3-8b
+POSTGRES_PASSWORD=change_to_a_strong_password
+
+# Enable long-term memory
+COGNEE_ENABLED=true
+
+# Neo4j graph store (Docker-internal host)
+NEO4J_URI=bolt://neo4j:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=change_to_a_strong_neo4j_password
+
+# Langfuse tracing (optional but recommended)
+LANGFUSE_PUBLIC_KEY=pk-...
+LANGFUSE_SECRET_KEY=sk-...
+```
+
+1. Build AGE-enabled Postgres image:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.graph.yml build postgres
+```
+
+1. Start full stack including graph profile:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.graph.yml --profile graph up -d
+```
+
+1. Validate services:
+
+```bash
+docker compose ps
+docker compose logs --tail=200 agent
+docker compose logs --tail=100 neo4j
+```
+
+1. Validate memory/tracing endpoints:
+
+```bash
+curl -s http://localhost:8000/api/memory/status
+curl -s "http://localhost:8000/api/knowledge/search?query=runway"
+```
+
+Expected:
+
+- Frontend: `http://localhost:80`
+- API docs: `http://localhost:8000/docs`
+- Neo4j Browser: `http://localhost:7474`
+
+Notes:
+
+- Langfuse in this stack is configured as external SaaS/self-hosted endpoint via API keys in `agent`; this compose file does not run a Langfuse server container.
+- If `NEO4J_PASSWORD` is unset, cognee still runs with vector storage but graph-store enhancement is disabled.
 
 ---
 
@@ -149,15 +224,17 @@ You have two valid approaches.
 This moves all Docker images, layers, containers, and volumes to a larger disk.
 
 1. Open Docker Desktop
-2. Go to Settings -> Resources -> Advanced
-3. Change Disk image location to your larger drive (for example `/Volumes/ExternalSSD/docker-data`)
-4. Apply and restart Docker Desktop
+1. Go to Settings -> Resources -> Advanced
+1. Change Disk image location to your larger drive (for example `/Volumes/ExternalSSD/docker-data`)
+1. Apply and restart Docker Desktop
 
 Pros:
+
 - Easiest long-term management
 - No compose changes
 
 Cons:
+
 - Moves all Docker workloads, not just this project
 
 ## Option B (Per-project): Use bind mounts on an external drive
@@ -207,6 +284,7 @@ docker compose -f docker-compose.yml -f docker-compose.storage.yml up -d
 ```
 
 Notes:
+
 - Keep using both files for all future commands.
 - Ensure your external drive is mounted before startup.
 
@@ -282,7 +360,7 @@ docker run --rm \
 ## Restore
 
 1. Stop stack: `docker compose down`
-2. Restore archive into volume:
+1. Restore archive into volume:
 
 ```bash
 docker run --rm \
@@ -291,7 +369,7 @@ docker run --rm \
   alpine sh -c "cd /target && rm -rf ./* && tar xzf /backup/pgdata_YYYY-MM-DD.tar.gz -C /target"
 ```
 
-3. Start stack: `docker compose up -d`
+1. Start stack: `docker compose up -d`
 
 ---
 
