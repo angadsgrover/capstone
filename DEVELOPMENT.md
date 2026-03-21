@@ -144,6 +144,7 @@ bash ./start-local-new-drive.sh --test
 ```
 
 This script creates missing virtual environments, installs Python/frontend dependencies, and starts the local stack.
+It requires Python 3.12 or 3.13 (3.14 may fail on dependency constraints).
 
 ### 1. Clone on the new drive
 
