@@ -386,7 +386,8 @@ async def run(cfg: SyncConfig):
 
 
 def build_config(args: argparse.Namespace) -> SyncConfig:
-    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+    # Override shell exports to avoid stale env state (e.g., old direnv values).
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
 
     user = args.user or os.getenv("HKO_ARCHIVE_USER", "")
     password = args.password or os.getenv("HKO_ARCHIVE_PASS", "")

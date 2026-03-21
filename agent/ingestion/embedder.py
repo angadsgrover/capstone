@@ -179,8 +179,20 @@ async def embed_text(text: str) -> list[float]:
     model_candidates = _get_model_candidates()
     endpoint = _get_embedding_endpoint()
     api_keys = _get_api_key_candidates()
+    allow_local = os.getenv("EMBED_ALLOW_LOCAL_FALLBACK", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     if not api_keys:
+        if allow_local:
+            logger.warning(
+                "No embedding API keys configured; using local fallback embedding. "
+                "Set EMBED_ALLOW_LOCAL_FALLBACK=false to enforce provider-only mode."
+            )
+            return _local_fallback_embedding(text)
         raise ValueError("No EMBED_API_KEY or LLM_API_KEY configured for embeddings.")
 
     errors: list[str] = []
@@ -221,12 +233,6 @@ async def embed_text(text: str) -> list[float]:
             except Exception as unknown_error:
                 errors.append(f"key#{idx}/model={model} unexpected error: {unknown_error}")
 
-    allow_local = os.getenv("EMBED_ALLOW_LOCAL_FALLBACK", "true").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
     if allow_local:
         logger.warning(
             "Embedding provider unavailable; using local fallback embedding. "
