@@ -27,6 +27,8 @@ from __future__ import annotations
 import logging
 import os
 import json
+import httpx
+from urllib.parse import urlparse
 
 import openai
 
@@ -35,12 +37,42 @@ logger = logging.getLogger(__name__)
 _client: openai.AsyncOpenAI | None = None
 
 
+def _normalize_base_url(base_url: str) -> str:
+    url = (base_url or "").strip().rstrip("/")
+    if not url:
+        return "https://api.openai.com/v1"
+
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = parsed.path or ""
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else url
+
+    # Common shorthand in .env: https://openrouter.ai
+    if "openrouter.ai" in host:
+        if path in ("", "/", "/api", "/api/", "/api/v", "/api/v/"):
+            return origin.rstrip("/") + "/api/v1"
+        if not path.startswith("/api/"):
+            return url + "/api/v1"
+
+    # Common shorthand in .env: https://api.openai.com
+    if "api.openai.com" in host and path in ("", "/"):
+        return url + "/v1"
+
+    return url
+
+
+def _get_embed_config() -> tuple[str, str, str]:
+    api_key = os.getenv("EMBED_API_KEY") or os.getenv("LLM_API_KEY", "")
+    base_url = _normalize_base_url(os.getenv("EMBED_BASE_URL") or os.getenv("BASE_URL", "https://api.openai.com/v1"))
+    model = os.getenv("EMBED_MODEL", "openai/text-embedding-3-small")
+    return api_key, base_url, model
+
+
 def _get_client() -> openai.AsyncOpenAI:
     """Lazily initialize the OpenAI-compatible client (supports both OpenAI + OpenRouter)."""
     global _client
     if _client is None:
-        api_key = os.getenv("EMBED_API_KEY") or os.getenv("LLM_API_KEY", "")
-        base_url = os.getenv("EMBED_BASE_URL") or os.getenv("BASE_URL", "https://api.openai.com/v1")
+        api_key, base_url, _ = _get_embed_config()
 
         if not api_key:
             logger.warning("No EMBED_API_KEY or LLM_API_KEY set for embeddings.")
@@ -51,9 +83,36 @@ def _get_client() -> openai.AsyncOpenAI:
 
 def _get_embedding_model() -> str:
     """Get embedding model ID from env, with sensible default."""
-    model = os.getenv("EMBED_MODEL", "openai/text-embedding-3-small")
+    _, _, model = _get_embed_config()
     logger.debug("Embedding model: %s", model)
     return model
+
+
+def _extract_embedding_from_response(resp: object) -> list[float] | None:
+    # Typical OpenAI Python SDK shape (Pydantic object)
+    if hasattr(resp, "data") and getattr(resp, "data"):
+        first = resp.data[0]  # type: ignore[attr-defined]
+        if hasattr(first, "embedding") and first.embedding:  # type: ignore[attr-defined]
+            return first.embedding  # type: ignore[return-value]
+
+    # Some compatible gateways may return dict-like payloads.
+    if isinstance(resp, dict):
+        data = resp.get("data") or []
+        if data and isinstance(data[0], dict) and data[0].get("embedding"):
+            return data[0]["embedding"]
+
+    # Defensive fallback if a proxy/client returned a JSON string.
+    if isinstance(resp, str):
+        try:
+            payload = json.loads(resp)
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            data = payload.get("data") or []
+            if data and isinstance(data[0], dict) and data[0].get("embedding"):
+                return data[0]["embedding"]
+
+    return None
 
 
 async def embed_text(text: str) -> list[float]:
@@ -69,40 +128,50 @@ async def embed_text(text: str) -> list[float]:
     """
     client = _get_client()
     model = _get_embedding_model()
+    api_key, base_url, _ = _get_embed_config()
+
+    request_body = {
+        "input": text[:8192],
+        "model": model,
+    }
 
     try:
-        resp = await client.embeddings.create(
-            input=text[:8192],  # Truncate to avoid context limits
-            model=model,
-        )
-
-        # Typical OpenAI Python SDK shape (Pydantic object)
-        if hasattr(resp, "data") and getattr(resp, "data"):
-            first = resp.data[0]
-            if hasattr(first, "embedding") and first.embedding:
-                return first.embedding
-
-        # Some compatible gateways may return dict-like payloads.
-        if isinstance(resp, dict):
-            data = resp.get("data") or []
-            if data and isinstance(data[0], dict) and data[0].get("embedding"):
-                return data[0]["embedding"]
-
-        # Defensive fallback if a proxy/client returned a JSON string.
-        if isinstance(resp, str):
-            try:
-                payload = json.loads(resp)
-            except Exception:
-                payload = None
-            if isinstance(payload, dict):
-                data = payload.get("data") or []
-                if data and isinstance(data[0], dict) and data[0].get("embedding"):
-                    return data[0]["embedding"]
+        resp = await client.embeddings.create(**request_body)
+        vector = _extract_embedding_from_response(resp)
+        if vector:
+            return vector
 
         raise ValueError(f"Malformed embedding response type={type(resp).__name__}")
     except openai.APIError as e:
         logger.error("Embeddings API error (model=%s): %s", model, e)
         raise
+    except Exception as sdk_error:
+        logger.warning("SDK embeddings call failed; falling back to raw HTTP (model=%s): %s", model, sdk_error)
+
+        if not api_key:
+            raise
+
+        endpoint = base_url.rstrip("/") + "/embeddings"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=30) as http_client:
+            r = await http_client.post(endpoint, headers=headers, json=request_body)
+            r.raise_for_status()
+            payload = r.json()
+            vector = _extract_embedding_from_response(payload)
+            if vector:
+                return vector
+
+            if isinstance(payload, dict) and payload.get("error"):
+                raise ValueError(f"Embedding API error payload: {payload.get('error')}")
+
+            if isinstance(payload, dict):
+                raise ValueError(f"No embedding data received. Payload keys: {list(payload.keys())}")
+
+        raise ValueError("Malformed embedding response after raw HTTP fallback.")
 
 
 async def embed_and_store(

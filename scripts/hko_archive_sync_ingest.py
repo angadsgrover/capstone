@@ -239,11 +239,18 @@ async def ingest_files(cfg: SyncConfig, state: StateStore) -> int:
             source_type = source_type_map.get(category, category.lower())
             files = sorted((cfg.target_dir / category).glob("*.xml.gz"))
             count = 0
+            attempts = 0
+            failed = 0
 
             for file_path in files:
+                if attempts >= per_category_limit:
+                    break
+
                 rel = f"{category}/{file_path.name}"
                 if state.is_ingested(rel):
                     continue
+
+                attempts += 1
 
                 try:
                     with gzip.open(file_path, "rt", encoding="utf-8", errors="ignore") as f:
@@ -273,6 +280,14 @@ async def ingest_files(cfg: SyncConfig, state: StateStore) -> int:
 
                 # Keep failed items retriable in later runs.
                 if row_id == -1:
+                    failed += 1
+                    # Stop early when provider/config is broken to avoid noisy loops.
+                    if failed >= min(10, per_category_limit):
+                        print(
+                            f"Stopping {category} ingest early after {failed} failed embedding attempts. "
+                            "Check embedding provider config (EMBED_BASE_URL/EMBED_MODEL/API key)."
+                        )
+                        break
                     continue
 
                 state.mark_ingested(rel, source_type)
