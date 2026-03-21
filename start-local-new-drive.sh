@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # One-command local bootstrap for running without Docker from a new drive.
-# It installs frontend + Python dependencies, then starts services via start.sh.
+# It installs frontend + Python dependencies into ONE shared virtualenv,
+# then starts services via start.sh.
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -85,43 +86,28 @@ ensure_venv() {
   fi
 }
 
-setup_agent() {
-  echo "[4/5] Setting up agent environment..."
-  ensure_venv "agent/.venv"
-  source agent/.venv/bin/activate
+setup_shared_python_env() {
+  echo "[1/2] Setting up shared Python environment..."
+  ensure_venv ".venv"
+  source .venv/bin/activate
   pip install --upgrade pip
 
-  # agent/requirements.txt references local MCP packages by name.
-  # Install them into the same environment first so resolution does not hit PyPI.
+  # Install local MCP packages first so name-based requirements resolve locally.
   pip install -e aviation-weather-mcp-python
   pip install -e hk-climate-mcp-server-python
+  pip install -e adsb_mcp
 
+  # Install agent requirements last (includes shared deps and local package names).
   pip install -r agent/requirements.txt
   deactivate
 }
 
-setup_mcp_project() {
-  local path="$1"
-  local label="$2"
-  local step="$3"
-
-  echo "[$step/5] Setting up ${label}..."
-  ensure_venv "$path/.venv"
-  source "$path/.venv/bin/activate"
-  pip install --upgrade pip
-  pip install -e "$path"
-  deactivate
-}
-
 setup_frontend() {
-  echo "[5/5] Installing frontend dependencies..."
+  echo "[2/2] Installing frontend dependencies..."
   (cd frontend-app && npm ci)
 }
 
-setup_mcp_project "aviation-weather-mcp-python" "aviation weather MCP" "1"
-setup_mcp_project "hk-climate-mcp-server-python" "HK climate MCP" "2"
-setup_mcp_project "adsb_mcp" "ADS-B MCP" "3"
-setup_agent
+setup_shared_python_env
 setup_frontend
 
 echo "Bootstrap complete. Starting local stack..."

@@ -143,7 +143,7 @@ bash ./start-local-new-drive.sh --check
 bash ./start-local-new-drive.sh --test
 ```
 
-This script creates missing virtual environments, installs Python/frontend dependencies, and starts the local stack.
+This script creates a shared root `.venv`, installs all Python/frontend dependencies once, and starts the local stack.
 It requires Python 3.12 or 3.13 (3.14 may fail on dependency constraints).
 
 ### 1. Clone on the new drive
@@ -163,32 +163,20 @@ npm ci
 cd ..
 ```
 
-### 3. Create Python virtual environments for each service
+### 3. Create one shared Python virtual environment
 
 ```bash
-python3.12 -m venv agent/.venv
-python3.12 -m venv aviation-weather-mcp-python/.venv
-python3.12 -m venv hk-climate-mcp-server-python/.venv
-python3.12 -m venv adsb_mcp/.venv
+python3.12 -m venv .venv
+source .venv/bin/activate
 ```
 
-### 4. Install Python dependencies
+### 4. Install Python dependencies once in shared env
 
 ```bash
-source agent/.venv/bin/activate
-pip install -r agent/requirements.txt
-deactivate
-
-source aviation-weather-mcp-python/.venv/bin/activate
 pip install -e aviation-weather-mcp-python
-deactivate
-
-source hk-climate-mcp-server-python/.venv/bin/activate
 pip install -e hk-climate-mcp-server-python
-deactivate
-
-source adsb_mcp/.venv/bin/activate
 pip install -e adsb_mcp
+pip install -r agent/requirements.txt
 deactivate
 ```
 
@@ -235,7 +223,7 @@ curl -s http://localhost:5173 > /dev/null && echo "Frontend OK"
 ### 8. Common new-drive issues
 
 - If external drive path contains spaces, quote paths in commands.
-- If venv Python points to old path, recreate that `.venv` on the new drive.
+- If venv Python points to old path, recreate root `.venv` on the new drive.
 - On macOS, allow terminal access to external volumes if permission prompts appear.
 
 ---
