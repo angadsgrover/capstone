@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { FaChevronDown, FaChevronRight, FaBrain, FaListOl, FaLightbulb, FaCheckCircle } from 'react-icons/fa'
+import { ChevronDown, ChevronRight, Brain, ListOrdered, Lightbulb, CheckCircle, Route, Sparkles } from 'lucide-react'
 import { ThinkingStep } from '@/shared/types/agent'
 
 interface ThinkingSectionProps {
@@ -17,34 +17,41 @@ export default function ThinkingSection({ thinking, plan, route }: ThinkingSecti
   if (!hasContent) return null
 
   return (
-    <div className="mt-3 border border-indigo-200 dark:border-indigo-800 rounded-lg overflow-hidden bg-indigo-50/50 dark:bg-indigo-950/20">
-      {/* Header - Collapsible */}
+    <div className="mt-4 rounded-xl border border-indigo-500/20 overflow-hidden bg-gradient-to-br from-indigo-500/5 to-purple-500/5 backdrop-blur-sm">
+      {/* Header */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/20 transition-colors"
+        className="w-full flex items-center gap-2.5 px-4 py-3 text-xs font-medium text-indigo-300 hover:bg-white/[0.02] transition-colors"
       >
-        {isExpanded ? <FaChevronDown size={10} /> : <FaChevronRight size={10} />}
-        <FaBrain size={11} />
-        <span>Thinking</span>
+        <div className="flex items-center justify-center w-6 h-6 rounded-lg bg-indigo-500/15">
+          {isExpanded ? (
+            <ChevronDown className="h-3.5 w-3.5 text-indigo-400" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-indigo-400" />
+          )}
+        </div>
+        <Brain className="h-4 w-4 text-indigo-400" />
+        <span className="font-semibold">Reasoning</span>
 
         {/* Route badge */}
         {route && (
-          <span className="px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded text-[10px] font-mono">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-violet-500/15 text-violet-300 rounded-lg text-[10px] font-mono font-medium border border-violet-500/20">
+            <Route className="h-3 w-3" />
             {route}
           </span>
         )}
 
         {/* Count badges */}
-        <div className="flex gap-1.5 ml-auto">
+        <div className="flex gap-2 ml-auto">
           {plan && plan.length > 0 && (
-            <span className="flex items-center gap-1 px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded text-[10px]">
-              <FaListOl size={8} />
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-500/15 text-purple-300 rounded-md text-[10px] font-medium border border-purple-500/10">
+              <ListOrdered className="h-3 w-3" />
               {plan.length} steps
             </span>
           )}
           {thinking && thinking.length > 0 && (
-            <span className="flex items-center gap-1 px-1.5 py-0.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 rounded text-[10px]">
-              <FaLightbulb size={8} />
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded-md text-[10px] font-medium border border-emerald-500/10">
+              <Sparkles className="h-3 w-3" />
               {thinking.length}
             </span>
           )}
@@ -53,21 +60,24 @@ export default function ThinkingSection({ thinking, plan, route }: ThinkingSecti
 
       {/* Expanded content */}
       {isExpanded && (
-        <div className="px-3 pb-3 space-y-3">
+        <div className="px-4 pb-4 space-y-4">
           {/* Plan section */}
           {plan && plan.length > 0 && (
-            <div>
-              <div className="flex items-center gap-1.5 mb-2 text-[10px] font-semibold text-purple-600 dark:text-purple-400">
-                <FaListOl size={9} />
-                Multi-Step Plan
+            <div className="p-3 rounded-lg bg-purple-500/5 border border-purple-500/10">
+              <div className="flex items-center gap-2 mb-3 text-[11px] font-semibold text-purple-400 uppercase tracking-wider">
+                <ListOrdered className="h-3.5 w-3.5" />
+                Execution Plan
               </div>
-              <ol className="space-y-1.5 list-decimal list-inside">
+              <ol className="space-y-2">
                 {plan.map((step, idx) => (
                   <li
                     key={idx}
-                    className="text-xs text-zinc-700 dark:text-zinc-300 pl-2"
+                    className="flex gap-3 text-sm text-white/70"
                   >
-                    {step}
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-purple-500/20 text-purple-400 text-[10px] font-bold flex items-center justify-center">
+                      {idx + 1}
+                    </span>
+                    <span className="pt-0.5">{step}</span>
                   </li>
                 ))}
               </ol>
@@ -77,39 +87,48 @@ export default function ThinkingSection({ thinking, plan, route }: ThinkingSecti
           {/* Thinking steps */}
           {thinking && thinking.length > 0 && (
             <div className="space-y-2">
-              <div className="flex items-center gap-1.5 mb-2 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
-                <FaLightbulb size={9} />
+              <div className="flex items-center gap-2 mb-3 text-[11px] font-semibold text-emerald-400 uppercase tracking-wider">
+                <Lightbulb className="h-3.5 w-3.5" />
                 Reasoning Steps
               </div>
               {thinking.map((step, idx) => (
                 <div
                   key={idx}
-                  className="border border-zinc-200 dark:border-zinc-700 rounded-md p-2 bg-white/50 dark:bg-zinc-900/30"
+                  className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] hover:border-white/[0.1] transition-colors"
                 >
-                  {/* Step header */}
-                  <div className="flex items-start gap-2 mb-1">
+                  <div className="flex items-start gap-3">
                     <div className="flex-shrink-0 mt-0.5">
-                      {step.type === 'plan' && <FaListOl className="text-purple-500" size={10} />}
-                      {step.type === 'reasoning' && <FaBrain className="text-indigo-500" size={10} />}
-                      {step.type === 'synthesis' && <FaCheckCircle className="text-green-500" size={10} />}
+                      {step.type === 'plan' && (
+                        <div className="w-5 h-5 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                          <ListOrdered className="h-3 w-3 text-purple-400" />
+                        </div>
+                      )}
+                      {step.type === 'reasoning' && (
+                        <div className="w-5 h-5 rounded-lg bg-indigo-500/20 flex items-center justify-center">
+                          <Brain className="h-3 w-3 text-indigo-400" />
+                        </div>
+                      )}
+                      {step.type === 'synthesis' && (
+                        <div className="w-5 h-5 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+                          <CheckCircle className="h-3 w-3 text-emerald-400" />
+                        </div>
+                      )}
                     </div>
-                    <div className="flex-1">
-                      <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 mb-0.5">
-                        {step.type.charAt(0).toUpperCase() + step.type.slice(1)}
-                        {' · '}
-                        <span className="text-zinc-400 dark:text-zinc-500">
-                          {new Date(step.timestamp).toLocaleTimeString()}
-                        </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 text-[10px] text-white/40">
+                        <span className="font-medium text-white/60 capitalize">{step.type}</span>
+                        <span>·</span>
+                        <span>{new Date(step.timestamp).toLocaleTimeString()}</span>
                       </div>
-                      <p className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed">
+                      <p className="text-sm text-white/80 leading-relaxed">
                         {step.step}
                       </p>
                       {step.result && (
-                        <div className="mt-1.5 pt-1.5 border-t border-zinc-200 dark:border-zinc-700">
-                          <div className="text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 mb-0.5">
-                            Result:
+                        <div className="mt-2 pt-2 border-t border-white/[0.06]">
+                          <div className="text-[10px] font-semibold text-emerald-400/80 mb-1 uppercase tracking-wide">
+                            Result
                           </div>
-                          <p className="text-xs text-green-700 dark:text-green-300">
+                          <p className="text-sm text-emerald-300/80">
                             {step.result}
                           </p>
                         </div>

@@ -7,17 +7,19 @@ import { Message } from '@/shared/types/agent'
 import { ExecutionTraceStepData } from '@/shared/types/api'
 import MessageBubble from './MessageBubble'
 import ChatInput from './ChatInput'
-import { Button } from '@/components/ui/button'
-import { FaRobot, FaTrash } from 'react-icons/fa'
+import {
+  Bot, Sparkles, Cloud, Plane, Wind, Trash2,
+  MessageSquare, Zap
+} from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:8000'
 const STREAMING_ENABLED = import.meta.env.VITE_ENABLE_STREAMING !== 'false'
 
 const QUICK_PROMPTS = [
-  "What's the weather in Hong Kong right now?",
-  "Show METAR for VHHH",
-  "Are there any active weather warnings?",
-  "Aviation weather for Heathrow airport",
+  { text: "What's the weather in Hong Kong?", icon: Cloud },
+  { text: "Show METAR for VHHH", icon: Plane },
+  { text: "Any active weather warnings?", icon: Wind },
+  { text: "Aviation weather for Heathrow", icon: Zap },
 ]
 
 function isExecutionTraceStepData(value: unknown): value is ExecutionTraceStepData {
@@ -30,22 +32,18 @@ export default function ChatView() {
   const { messages, isLoading, loadFromStorage, setLoading, addMessage, clearMessages } =
     useChatStore()
 
-  // Tracks the message being streamed (partial content)
   const [streamingMsg, setStreamingMsg] = useState<Message | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const cancelStreamRef = useRef<(() => void) | null>(null)
 
-  // Load history on mount
   useEffect(() => {
     loadFromStorage()
   }, [loadFromStorage])
 
-  // Auto-scroll on new messages or stream updates
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamingMsg?.content])
 
-  // Cmd+K → clear chat
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -57,7 +55,6 @@ export default function ChatView() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  // Cleanup active stream on unmount
   useEffect(() => {
     return () => cancelStreamRef.current?.()
   }, [])
@@ -109,13 +106,9 @@ export default function ChatView() {
       streamAgentFetch(endpoint, {
         onChunk: (chunk) => {
           accumulated += chunk
-          setStreamingMsg(prev => prev ? {
-            ...prev,
-            content: accumulated
-          } : placeholder)
+          setStreamingMsg(prev => prev ? { ...prev, content: accumulated } : placeholder)
         },
         onToolCall: (toolCall) => {
-          // Keep latest snapshot by replacing the most recent matching running entry.
           let replaced = false
           for (let i = collectedToolCalls.length - 1; i >= 0; i--) {
             if (collectedToolCalls[i].name === toolCall.name && collectedToolCalls[i].status === 'running') {
@@ -125,47 +118,28 @@ export default function ChatView() {
             }
           }
           if (!replaced) collectedToolCalls.push(toolCall)
-
-          setStreamingMsg(prev => {
-            if (!prev) return placeholder
-            return { ...prev, toolCalls: [...collectedToolCalls] }
-          })
+          setStreamingMsg(prev => prev ? { ...prev, toolCalls: [...collectedToolCalls] } : placeholder)
         },
         onThinking: (thinking) => {
           collectedThinking.push(thinking)
-          setStreamingMsg(prev => {
-            if (!prev) return placeholder
-            return {
-              ...prev,
-              thinking: [...collectedThinking],
-            }
-          })
+          setStreamingMsg(prev => prev ? { ...prev, thinking: [...collectedThinking] } : placeholder)
         },
         onPlan: (plan) => {
           collectedPlan = plan
-          setStreamingMsg(prev => {
-            if (!prev) return placeholder
-            return { ...prev, plan }
-          })
+          setStreamingMsg(prev => prev ? { ...prev, plan } : placeholder)
         },
         onRoute: (route) => {
           collectedRoute = route
-          setStreamingMsg(prev => {
-            if (!prev) return placeholder
-            return { ...prev, route }
-          })
+          setStreamingMsg(prev => prev ? { ...prev, route } : placeholder)
         },
         onError: async () => {
-          // Stream failed — fall back to full response
           errored = true
           setStreamingMsg(null)
           toast.warning('Streaming failed, falling back to standard response')
           await sendFull(text, true)
           resolve()
         },
-        onComplete: () => {
-          resolve()
-        },
+        onComplete: () => resolve(),
       })
     })
 
@@ -221,71 +195,86 @@ export default function ChatView() {
   const isIdle = !isLoading && !streamingMsg
 
   return (
-    <div
-      className="flex flex-col rounded-3xl border border-white/[0.08] bg-[hsl(228_22%_11%)]/90 backdrop-blur-2xl shadow-2xl shadow-black/20 overflow-hidden"
-      style={{ height: 'calc(100vh - 160px)', minHeight: '420px' }}
-    >
-      {/* Chat header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.06] bg-white/[0.02]">
+    <div className="flex flex-col h-full rounded-2xl border border-white/[0.06] bg-slate-900/40 backdrop-blur-xl overflow-hidden shadow-2xl shadow-black/20">
+
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.06] bg-white/[0.02]">
         <div className="flex items-center gap-3">
-          <div className="relative w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-            <FaRobot className="text-white" size={16} />
-            <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-white/20 to-transparent" />
+          <div className="relative">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/25">
+              <Bot className="text-white h-4 w-4" />
+            </div>
+            <Sparkles className="absolute -top-0.5 -right-0.5 h-3 w-3 text-amber-400" />
           </div>
           <div>
             <p className="text-sm font-semibold text-white/90">AI Assistant</p>
-            <p className="text-xs text-white/40">
+            <p className="text-[11px] text-white/40">
               {isLoading ? (
                 <span className="inline-flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  Processing...
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
+                  </span>
+                  Thinking...
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                  Online
+                  Ready to help
                 </span>
               )}
             </p>
           </div>
         </div>
 
-        <Button
-          variant="ghost"
-          size="sm"
+        <button
           onClick={handleClear}
           title="Clear chat (⌘K)"
-          className="h-8 gap-1.5 text-xs rounded-xl text-white/40 hover:text-red-400 hover:bg-red-500/10 transition-all duration-200"
+          className="flex items-center gap-1.5 h-8 px-3 text-xs font-medium rounded-lg text-white/40 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all duration-200"
         >
-          <FaTrash size={11} />
-          Clear
-        </Button>
+          <Trash2 className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Clear</span>
+        </button>
       </div>
 
-      {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
         {messages.length === 0 && !streamingMsg ? (
-          /* Empty state */
-          <div className="flex flex-col items-center justify-center h-full text-center py-8">
-            <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-indigo-500/20 via-purple-500/20 to-pink-500/20 flex items-center justify-center mb-5 border border-white/[0.08]">
-              <FaRobot className="text-indigo-400" size={28} />
+          <div className="flex flex-col items-center justify-center h-full text-center py-12">
+            {/* Hero illustration */}
+            <div className="relative mb-8">
+              <div className="absolute inset-0 blur-3xl bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-pink-500/20 rounded-full scale-150" />
+              <div className="relative w-20 h-20 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border border-white/[0.08] flex items-center justify-center shadow-2xl">
+                <MessageSquare className="h-8 w-8 text-indigo-400" />
+                <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg">
+                  <Sparkles className="h-3 w-3 text-white" />
+                </div>
+              </div>
             </div>
-            <h3 className="text-xl font-semibold text-white/90 mb-2">
+
+            <h3 className="text-xl font-semibold text-white mb-2">
               How can I help you today?
             </h3>
-            <p className="text-sm text-white/40 max-w-sm mb-8">
-              Ask me about aviation weather, METAR/TAF reports, flight conditions, and more.
+            <p className="text-sm text-white/40 max-w-sm mb-10">
+              Ask about aviation weather, METAR/TAF reports, flight conditions, and real-time aircraft tracking.
             </p>
 
+            {/* Quick prompts */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
-              {QUICK_PROMPTS.map((prompt) => (
+              {QUICK_PROMPTS.map(({ text, icon: Icon }) => (
                 <button
-                  key={prompt}
-                  onClick={() => sendMessage(prompt)}
-                  className="group text-left text-sm px-4 py-3.5 rounded-2xl border border-white/[0.08] bg-white/[0.03]
-                    hover:bg-white/[0.06] hover:border-white/[0.12] text-white/60 hover:text-white/80 transition-all duration-200"
+                  key={text}
+                  onClick={() => sendMessage(text)}
+                  className="group text-left text-sm px-4 py-3.5 rounded-xl border border-white/[0.06] bg-white/[0.02]
+                    hover:bg-gradient-to-r hover:from-indigo-500/10 hover:to-purple-500/10 hover:border-indigo-500/20
+                    text-white/60 hover:text-white/90 transition-all duration-300"
                 >
-                  <span className="inline-block group-hover:translate-x-0.5 transition-transform duration-200">{prompt}</span>
+                  <div className="flex items-center gap-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center group-hover:bg-indigo-500/20 transition-colors duration-300">
+                      <Icon className="h-4 w-4 text-white/40 group-hover:text-indigo-400 transition-colors duration-300" />
+                    </div>
+                    <span className="flex-1 group-hover:translate-x-0.5 transition-transform duration-200">{text}</span>
+                  </div>
                 </button>
               ))}
             </div>
@@ -296,23 +285,22 @@ export default function ChatView() {
               <MessageBubble key={idx} message={msg} />
             ))}
 
-            {/* Streaming (in-progress) bubble */}
             {streamingMsg && (
               <MessageBubble message={streamingMsg} isStreaming />
             )}
 
-            {/* Thinking dots (no content yet) */}
+            {/* Typing indicator */}
             {isLoading && !streamingMsg && (
               <div className="flex justify-start">
-                <div className="flex gap-3 items-center">
-                  <div className="w-9 h-9 rounded-2xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center flex-shrink-0 shadow-lg shadow-indigo-500/20">
-                    <FaRobot className="text-white" size={14} />
+                <div className="flex gap-3 items-start">
+                  <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-indigo-500/20">
+                    <Bot className="text-white h-4 w-4" />
                   </div>
-                  <div className="px-5 py-4 bg-white/[0.05] border border-white/[0.08] rounded-2xl rounded-tl-md">
-                    <div className="flex gap-1.5">
+                  <div className="px-4 py-3 bg-white/[0.04] border border-white/[0.06] rounded-2xl rounded-tl-md">
+                    <div className="flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-indigo-400/60 animate-bounce" />
-                      <span className="w-2 h-2 rounded-full bg-purple-400/60 animate-bounce [animation-delay:0.15s]" />
-                      <span className="w-2 h-2 rounded-full bg-pink-400/60 animate-bounce [animation-delay:0.3s]" />
+                      <span className="w-2 h-2 rounded-full bg-violet-400/60 animate-bounce [animation-delay:0.15s]" />
+                      <span className="w-2 h-2 rounded-full bg-purple-400/60 animate-bounce [animation-delay:0.3s]" />
                     </div>
                   </div>
                 </div>
@@ -327,7 +315,7 @@ export default function ChatView() {
       <ChatInput
         onSend={sendMessage}
         disabled={!isIdle}
-        placeholder="Ask about weather... (Enter to send, Shift+Enter for newline)"
+        placeholder="Ask about aviation weather... (Enter to send)"
       />
     </div>
   )
