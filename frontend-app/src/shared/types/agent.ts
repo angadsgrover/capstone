@@ -2,7 +2,7 @@
 
 export interface ToolCall {
   name: string
-  input: Record<string, any>
+  input: Record<string, unknown>
   output?: string
   error?: string
   duration?: number
@@ -22,7 +22,7 @@ export interface ThinkingStep {
 export interface ExecutionTraceStep {
   step: number
   task: string
-  result: string
+  result: string | Record<string, unknown>
 }
 
 export interface Message {
@@ -37,7 +37,7 @@ export interface Message {
 
 export interface AgentRequest {
   input: string
-  context?: Record<string, any>
+  context?: Record<string, unknown>
 }
 
 export interface AgentResponse {
@@ -48,7 +48,7 @@ export interface AgentResponse {
     plan?: string[]
     execution_trace?: ExecutionTraceStep[]
     multi_step?: boolean
-    [key: string]: any
+    [key: string]: unknown
   }
 }
 

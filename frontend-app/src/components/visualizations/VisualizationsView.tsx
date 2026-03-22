@@ -3,45 +3,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { agentService } from '@/shared/services/agentService'
+import { AirportPoint, FlightPathEdge, FlightPathNode, HeatCell, TrendPoint } from '@/shared/types/api'
 import ReactFlow, { Background, BackgroundVariant, Controls, Edge, Node } from 'reactflow'
 import { Loader2, Radar, PlaneTakeoff, ShieldAlert, Wind } from 'lucide-react'
 import 'reactflow/dist/style.css'
-
-type AirportPoint = {
-  icao: string
-  lat: number
-  lon: number
-  obs_time?: string
-  flight_cat?: string
-  temp_c?: number
-  wind_speed_kt?: number
-}
-
-type TrendPoint = {
-  icao: string
-  obs_time?: string
-  wind_speed_kt?: number
-  temp_c?: number
-}
-
-type HeatCell = {
-  icao: string
-  incidents: number
-  severity_score: number
-}
-
-type FlightPathNode = {
-  id: string
-  label?: string
-  lat?: number
-  lon?: number
-}
-
-type FlightPathEdge = {
-  id: string
-  source: string
-  target: string
-}
 
 const ICAO_DEFAULT = 'VHHH,EGLL,KJFK'
 

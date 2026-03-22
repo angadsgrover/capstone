@@ -1,4 +1,5 @@
 import { ToolCall, ThinkingStep } from '../types/agent'
+import { StreamPayload } from '../types/api'
 
 export interface StreamMetadata {
   toolCalls?: ToolCall[]
@@ -107,22 +108,27 @@ export async function streamAgentFetch(endpoint: string, options: StreamOptions 
         if (line.startsWith('data: ')) {
           try {
             const payload = JSON.parse(line.slice(6))
+            if (!payload || typeof payload !== 'object') {
+              currentEvent = ''
+              continue
+            }
+            const typedPayload = payload as StreamPayload
 
             // Handle different event types
-            if (currentEvent === 'chunk' || payload.chunk) {
-              onChunk?.(payload.chunk || payload.data || '')
-            } else if (currentEvent === 'tool_start' || payload.tool_start) {
+            if (currentEvent === 'chunk' || typedPayload.chunk) {
+              onChunk?.(typedPayload.chunk || typedPayload.data || '')
+            } else if (currentEvent === 'tool_start' || typedPayload.tool_start) {
               const toolCall: ToolCall = {
-                name: payload.tool_start || payload.name,
-                input: payload.tool_input || payload.input || {},
+                name: typedPayload.tool_start || typedPayload.name || 'unknown_tool',
+                input: typedPayload.tool_input || typedPayload.input || {},
                 status: 'running',
                 startTime: new Date(),
               }
               metadata.toolCalls!.push(toolCall)
               onToolCall?.(toolCall)
               onMetadata?.(metadata)
-            } else if (currentEvent === 'tool_end' || payload.tool_end) {
-              const toolName = payload.tool_end || payload.name
+            } else if (currentEvent === 'tool_end' || typedPayload.tool_end) {
+              const toolName = typedPayload.tool_end || typedPayload.name
               // Find the last running tool with this name (ES2023 findLast polyfill)
               const toolCalls = metadata.toolCalls || []
               let lastTool: ToolCall | undefined
@@ -133,26 +139,26 @@ export async function streamAgentFetch(endpoint: string, options: StreamOptions 
                 }
               }
               if (lastTool) {
-                lastTool.status = payload.error ? 'error' : 'success'
-                lastTool.output = payload.output || payload.result
-                lastTool.error = payload.error
+                lastTool.status = typedPayload.error ? 'error' : 'success'
+                lastTool.output = typedPayload.output || typedPayload.result
+                lastTool.error = typedPayload.error
                 lastTool.endTime = new Date()
-                lastTool.duration = payload.duration || (lastTool.startTime ? Date.now() - new Date(lastTool.startTime).getTime() : undefined)
+                lastTool.duration = typedPayload.duration || (lastTool.startTime ? Date.now() - new Date(lastTool.startTime).getTime() : undefined)
                 onToolCall?.(lastTool)
                 onMetadata?.(metadata)
               }
-            } else if (currentEvent === 'thinking' || payload.thinking) {
+            } else if (currentEvent === 'thinking' || typedPayload.thinking) {
               const thinking: ThinkingStep = {
-                type: payload.type || 'reasoning',
-                step: payload.thinking || payload.step || payload.data,
-                result: payload.result,
+                type: typedPayload.type || 'reasoning',
+                step: typedPayload.thinking || typedPayload.step || typedPayload.data || '',
+                result: typedPayload.result,
                 timestamp: new Date(),
               }
               metadata.thinking!.push(thinking)
               onThinking?.(thinking)
               onMetadata?.(metadata)
-            } else if (currentEvent === 'plan' || payload.plan) {
-              metadata.plan = payload.plan || payload.steps
+            } else if (currentEvent === 'plan' || typedPayload.plan) {
+              metadata.plan = typedPayload.plan || typedPayload.steps
               const planThinking: ThinkingStep = {
                 type: 'plan',
                 step: `Generated ${(metadata.plan || []).length} execution step(s)`,
@@ -162,8 +168,8 @@ export async function streamAgentFetch(endpoint: string, options: StreamOptions 
               onThinking?.(planThinking)
               onPlan?.(metadata.plan!)
               onMetadata?.(metadata)
-            } else if (currentEvent === 'route' || payload.route) {
-              metadata.route = payload.route || payload.specialist
+            } else if (currentEvent === 'route' || typedPayload.route) {
+              metadata.route = typedPayload.route || typedPayload.specialist
               onRoute?.(metadata.route!)
               onMetadata?.(metadata)
             }

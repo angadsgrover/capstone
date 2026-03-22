@@ -4,6 +4,7 @@ import { useChatStore } from '@/shared/state/chatStore'
 import { agentService } from '@/shared/services/agentService'
 import { streamAgentFetch } from '@/shared/services/streamService'
 import { Message } from '@/shared/types/agent'
+import { ExecutionTraceStepData } from '@/shared/types/api'
 import MessageBubble from './MessageBubble'
 import ChatInput from './ChatInput'
 import { Button } from '@/components/ui/button'
@@ -18,6 +19,12 @@ const QUICK_PROMPTS = [
   "Are there any active weather warnings?",
   "Aviation weather for Heathrow airport",
 ]
+
+function isExecutionTraceStepData(value: unknown): value is ExecutionTraceStepData {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<ExecutionTraceStepData>
+  return typeof candidate.step === 'number' && typeof candidate.task === 'string'
+}
 
 export default function ChatView() {
   const { messages, isLoading, loadFromStorage, setLoading, addMessage, clearMessages } =
@@ -183,9 +190,11 @@ export default function ChatView() {
       const response = await agentService.sendMessage(text)
       const plan = response.data?.plan
       const route = response.data?.route
-      const executionTrace = response.data?.execution_trace ?? []
+      const executionTrace = Array.isArray(response.data?.execution_trace)
+        ? response.data.execution_trace.filter(isExecutionTraceStepData)
+        : []
 
-      const thinking = executionTrace.map((step: any) => ({
+      const thinking = executionTrace.map((step) => ({
         type: 'reasoning' as const,
         step: `Step ${step.step}: ${step.task}`,
         result: typeof step.result === 'string' ? step.result.slice(0, 180) : String(step.result),

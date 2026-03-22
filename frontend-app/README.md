@@ -41,6 +41,22 @@ npm run preview
 - `POST /api/agent/execute`
 - `GET /api/agent/events`
 
+## Optional LangChain/LangGraph Backend
+
+The frontend can call a LangChain/LangGraph-compatible run endpoint directly instead of `POST /api/agent`.
+
+Set these environment variables (for example in `.env.local`):
+
+```bash
+VITE_LANGCHAIN_ENABLED=true
+VITE_LANGCHAIN_BASE_URL=https://your-agent-server.example.com
+VITE_LANGCHAIN_RUN_ENDPOINT=/runs/wait
+VITE_LANGCHAIN_ASSISTANT_ID=assistant_xxx
+VITE_LANGCHAIN_API_KEY=your_token_if_required
+```
+
+When enabled, chat requests try LangChain first and automatically fall back to the local agent API if LangChain is unreachable or misconfigured.
+
 Planning-aware fields/events handled by the UI:
 
 - `route`
