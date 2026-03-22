@@ -7,20 +7,17 @@ import { Message } from '@/shared/types/agent'
 import { ExecutionTraceStepData } from '@/shared/types/api'
 import MessageBubble from './MessageBubble'
 import ChatInput from './ChatInput'
-import {
-  Bot, Sparkles, Cloud, Plane, Wind, Trash2,
-  MessageSquare, Zap
-} from 'lucide-react'
+import MaterialIcon from '@/components/ui/MaterialIcon'
 import { cn } from '@/lib/utils'
 
 const API_BASE = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:8000'
 const STREAMING_ENABLED = import.meta.env.VITE_ENABLE_STREAMING !== 'false'
 
 const QUICK_PROMPTS = [
-  { text: "What's the weather in Hong Kong?", icon: Cloud },
-  { text: "Show METAR for VHHH", icon: Plane },
-  { text: "Any active weather warnings?", icon: Wind },
-  { text: "Aviation weather for Heathrow", icon: Zap },
+  { text: "What's the weather in Hong Kong?", icon: 'wb_cloudy' },
+  { text: "Show METAR for VHHH", icon: 'flight_takeoff' },
+  { text: "Any active weather warnings?", icon: 'warning' },
+  { text: "Aviation weather for Heathrow", icon: 'bolt' },
 ]
 
 function isExecutionTraceStepData(value: unknown): value is ExecutionTraceStepData {
@@ -196,115 +193,63 @@ export default function ChatView() {
   const isIdle = !isLoading && !streamingMsg
 
   return (
-    <div className={cn(
-      "flex flex-col h-full rounded-2xl border backdrop-blur-xl overflow-hidden shadow-xl",
-      // Light mode
-      "border-slate-200/80 bg-white/80 shadow-slate-200/50",
-      // Dark mode
-      "dark:border-white/[0.06] dark:bg-slate-900/40 dark:shadow-black/20"
-    )}>
+    <div className="flex flex-col h-full w-full relative">
 
-      {/* Header */}
-      <div className={cn(
-        "flex items-center justify-between px-5 py-3.5 border-b",
-        "border-slate-200/80 bg-slate-50/50 dark:border-white/[0.06] dark:bg-white/[0.02]"
-      )}>
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <Bot className="text-white h-4 w-4" />
-            </div>
-            <Sparkles className="absolute -top-0.5 -right-0.5 h-3 w-3 text-amber-400" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-slate-900 dark:text-white/90">AI Assistant</p>
-            <p className="text-[11px] text-slate-500 dark:text-white/40">
-              {isLoading ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="relative flex h-1.5 w-1.5">
-                    <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75 animate-ping" />
-                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
-                  </span>
-                  Thinking...
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  Ready to help
-                </span>
-              )}
-            </p>
-          </div>
-        </div>
-
-        <button
-          onClick={handleClear}
-          title="Clear chat (⌘K)"
-          className={cn(
-            "flex items-center gap-1.5 h-8 px-3 text-xs font-medium rounded-lg border border-transparent transition-all duration-200",
-            "text-slate-400 hover:text-red-500 hover:bg-red-50 hover:border-red-200",
-            "dark:text-white/40 dark:hover:text-red-400 dark:hover:bg-red-500/10 dark:hover:border-red-500/20"
-          )}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Clear</span>
-        </button>
-      </div>
+      {/* Background decoration */}
+      <div className="absolute top-1/4 right-20 w-96 h-96 bg-primary/5 rounded-full blur-[120px] -z-10 pointer-events-none" />
+      <div className="absolute bottom-40 left-20 w-80 h-80 bg-secondary/5 rounded-full blur-[100px] -z-10 pointer-events-none" />
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+      <div className="flex-1 overflow-y-auto px-6 md:px-12 py-8 space-y-8">
         {messages.length === 0 && !streamingMsg ? (
-          <div className="flex flex-col items-center justify-center h-full text-center py-12">
-            {/* Hero illustration */}
-            <div className="relative mb-8">
-              <div className="absolute inset-0 blur-3xl bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-pink-500/20 rounded-full scale-150" />
-              <div className={cn(
-                "relative w-20 h-20 rounded-2xl border flex items-center justify-center shadow-2xl",
-                "bg-gradient-to-br from-white to-slate-50 border-slate-200",
-                "dark:bg-gradient-to-br dark:from-slate-800 dark:to-slate-900 dark:border-white/[0.08]"
-              )}>
-                <MessageSquare className="h-8 w-8 text-indigo-500" />
-                <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg">
-                  <Sparkles className="h-3 w-3 text-white" />
-                </div>
+          <div className="flex flex-col items-center justify-center h-full text-center py-12 max-w-5xl mx-auto">
+            {/* Hero */}
+            <div className="relative mb-8 flex justify-center">
+              <div className="absolute inset-0 bg-secondary/20 blur-2xl rounded-full animate-pulse" />
+              <div className="relative w-24 h-24 bg-surface-container-high rounded-[2rem] flex items-center justify-center border border-outline-variant/20 glass-panel">
+                <MaterialIcon icon="cyclone" className="text-secondary text-5xl" filled />
               </div>
             </div>
 
-            <h3 className="text-xl font-semibold text-slate-900 dark:text-white mb-2">
-              How can I help you today?
-            </h3>
-            <p className="text-sm text-slate-500 dark:text-white/40 max-w-sm mb-10">
-              Ask about aviation weather, METAR/TAF reports, flight conditions, and real-time aircraft tracking.
+            <h1 className="text-5xl md:text-6xl font-black text-on-surface tracking-tighter leading-tight mb-4">
+              Clear Skies <span className="text-secondary italic">Await.</span>
+            </h1>
+            <p className="text-on-surface-variant text-lg max-w-xl mx-auto font-medium mb-8">
+              Real-time aviation weather intelligence powered by HKO, HKYAA, and PolyU collaboration.
             </p>
 
             {/* Quick prompts */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
-              {QUICK_PROMPTS.map(({ text, icon: Icon }) => (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-3xl">
+              {QUICK_PROMPTS.map(({ text, icon }) => (
                 <button
                   key={text}
                   onClick={() => sendMessage(text)}
+                  disabled={!isIdle}
                   className={cn(
-                    "group text-left text-sm px-4 py-3.5 rounded-xl border transition-all duration-300",
-                    "border-slate-200 bg-white hover:bg-gradient-to-r hover:from-indigo-50 hover:to-purple-50 hover:border-indigo-200",
-                    "dark:border-white/[0.06] dark:bg-white/[0.02] dark:hover:from-indigo-500/10 dark:hover:to-purple-500/10 dark:hover:border-indigo-500/20",
-                    "text-slate-600 hover:text-slate-900 dark:text-white/60 dark:hover:text-white/90"
+                    "glass-panel p-6 rounded-xl border border-outline-variant/10 text-left transition-all group",
+                    isIdle
+                      ? "hover:border-secondary/50 hover:shadow-lg hover:shadow-secondary/10 active:scale-[0.98] cursor-pointer"
+                      : "opacity-50 cursor-not-allowed"
                   )}
                 >
-                  <div className="flex items-center gap-3">
-                    <div className={cn(
-                      "flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors duration-300",
-                      "bg-slate-100 group-hover:bg-indigo-100 dark:bg-white/[0.05] dark:group-hover:bg-indigo-500/20"
-                    )}>
-                      <Icon className="h-4 w-4 text-slate-400 group-hover:text-indigo-500 dark:text-white/40 dark:group-hover:text-indigo-400 transition-colors duration-300" />
-                    </div>
-                    <span className="flex-1 group-hover:translate-x-0.5 transition-transform duration-200">{text}</span>
-                  </div>
+                  <MaterialIcon icon={icon} className="text-secondary mb-4 block text-2xl group-hover:scale-110 transition-transform" />
+                  <div className="text-on-surface font-semibold mb-1">{text}</div>
+                  <div className="text-xs text-on-surface-variant">Get real-time aviation weather data</div>
                 </button>
               ))}
             </div>
           </div>
         ) : (
-          <>
+          <div className="max-w-6xl mx-auto w-full space-y-8">
+            {/* Timestamp divider */}
+            {messages.length > 0 && (
+              <div className="flex justify-center py-4">
+                <span className="text-[10px] font-bold tracking-[0.2em] text-on-surface-variant uppercase px-4 py-1.5 rounded-full bg-surface-container-low border border-outline-variant/10">
+                  Today • {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short' })}
+                </span>
+              </div>
+            )}
+
             {messages.map((msg, idx) => (
               <MessageBubble key={idx} message={msg} />
             ))}
@@ -315,35 +260,49 @@ export default function ChatView() {
 
             {/* Typing indicator */}
             {isLoading && !streamingMsg && (
-              <div className="flex justify-start">
-                <div className="flex gap-3 items-start">
-                  <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-indigo-500/20">
-                    <Bot className="text-white h-4 w-4" />
-                  </div>
-                  <div className={cn(
-                    "px-4 py-3 border rounded-2xl rounded-tl-md",
-                    "bg-slate-50 border-slate-200 dark:bg-white/[0.04] dark:border-white/[0.06]"
-                  )}>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-indigo-400/60 animate-bounce" />
-                      <span className="w-2 h-2 rounded-full bg-violet-400/60 animate-bounce [animation-delay:0.15s]" />
-                      <span className="w-2 h-2 rounded-full bg-purple-400/60 animate-bounce [animation-delay:0.3s]" />
-                    </div>
-                  </div>
+              <div className="flex items-center gap-3 pl-14">
+                <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-surface-container-highest border border-outline-variant/15 shadow-lg">
+                  <div className="w-1.5 h-1.5 bg-secondary rounded-full animate-pulse shadow-glow-secondary"></div>
+                  <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">Processing weather data...</span>
                 </div>
               </div>
             )}
-          </>
+          </div>
         )}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <ChatInput
-        onSend={sendMessage}
-        disabled={!isIdle}
-        placeholder="Ask about aviation weather... (Enter to send)"
-      />
+      {/* Floating clear button */}
+      {messages.length > 0 && (
+        <button
+          onClick={handleClear}
+          title="Clear chat (⌘K)"
+          disabled={!isIdle}
+          className={cn(
+            "fixed top-24 right-8 z-20 flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all",
+            "bg-surface-container-high/80 backdrop-blur-sm border border-outline-variant/20",
+            "text-on-surface-variant text-xs font-medium uppercase tracking-wider shadow-lg",
+            isIdle
+              ? "hover:border-error/50 hover:text-error hover:bg-error/5 hover:shadow-error/20 active:scale-95 cursor-pointer"
+              : "opacity-50 cursor-not-allowed"
+          )}
+        >
+          <MaterialIcon icon="delete" className="text-base" />
+          <span>Clear</span>
+          <kbd className="ml-1 px-1.5 py-0.5 rounded bg-surface-container-highest/50 text-[9px] border border-outline-variant/20">⌘K</kbd>
+        </button>
+      )}
+
+      {/* Input Area - Fixed at bottom with max-width */}
+      <div className="w-full px-6 md:px-12 pb-8 pt-4">
+        <div className="max-w-5xl mx-auto">
+          <ChatInput
+            onSend={sendMessage}
+            disabled={!isIdle}
+            placeholder="Ask about aviation weather conditions..."
+          />
+        </div>
+      </div>
     </div>
   )
 }

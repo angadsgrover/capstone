@@ -22,6 +22,104 @@ from orchestrator import init_graph
 
 logger = logging.getLogger(__name__)
 
+# ── Langfuse (optional observability) ─────────────────────────────────────────
+
+_langfuse_enabled = False
+
+def _init_langfuse() -> bool:
+    """Initialize Langfuse SDK v3+ singleton if credentials are available."""
+    global _langfuse_enabled
+
+    public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+    secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+
+    if not public_key or not secret_key:
+        logger.info("Langfuse disabled: LANGFUSE_PUBLIC_KEY or LANGFUSE_SECRET_KEY not set")
+        return False
+
+    try:
+        from langfuse import Langfuse
+
+        # Initialize the singleton with explicit keys
+        # This sets up the global client that get_client() will return
+        Langfuse(
+            public_key=public_key,
+            secret_key=secret_key,
+            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+            enabled=True,
+        )
+        _langfuse_enabled = True
+        logger.info("Langfuse initialized successfully")
+        return True
+    except Exception as e:
+        logger.warning("Langfuse initialization failed: %s", e)
+        return False
+
+
+def _shutdown_langfuse() -> None:
+    """Flush and shutdown Langfuse client gracefully."""
+    if not _langfuse_enabled:
+        return
+    try:
+        from langfuse import get_client
+        client = get_client()
+        client.flush()
+        client.shutdown()
+        logger.info("Langfuse shutdown completed")
+    except Exception as e:
+        logger.warning("Langfuse shutdown error: %s", e)
+
+
+def _score_trace(
+    trace_id: str,
+    name: str,
+    value: float,
+    data_type: str = "NUMERIC",
+    comment: str = "",
+) -> bool:
+    """
+    Add a score to a Langfuse trace.
+
+    Args:
+        trace_id: The Langfuse trace ID to score
+        name: Score name (e.g., "user-feedback", "relevance")
+        value: Numeric score value
+        data_type: "NUMERIC" or "CATEGORICAL"
+        comment: Optional comment explaining the score
+
+    Returns:
+        True if score was created, False otherwise
+    """
+    if not _langfuse_enabled:
+        return False
+    try:
+        from langfuse import get_client
+        client = get_client()
+        client.create_score(
+            trace_id=trace_id,
+            name=name,
+            value=value,
+            data_type=data_type,
+            comment=comment or None,
+        )
+        return True
+    except Exception as e:
+        logger.warning("Failed to score trace %s: %s", trace_id, e)
+        return False
+
+
+def _generate_trace_id(session_id: str, timestamp: Optional[str] = None) -> str:
+    """
+    Generate a deterministic trace ID for a session.
+
+    This allows the frontend to predict the trace ID and link back to Langfuse.
+    """
+    import hashlib
+    if not timestamp:
+        timestamp = datetime.now(timezone.utc).isoformat()
+    seed = f"{session_id}:{timestamp}"
+    return hashlib.sha256(seed.encode()).hexdigest()[:32]
+
 # ── Module-level singletons ────────────────────────────────────────────────────
 
 db             = Database()
@@ -35,6 +133,7 @@ async def lifespan(app: FastAPI):
     global global_graph, global_mcp_client
 
     # Startup
+    _init_langfuse()  # Initialize Langfuse early (before graph init)
     await db.connect()
     await memory_manager.init()
     await cache.init()  # Initialize Redis cache
@@ -71,6 +170,7 @@ async def lifespan(app: FastAPI):
         await global_mcp_client.cleanup()
     await db.close()
     await cache.close()  # Close Redis connection
+    _shutdown_langfuse()  # Flush and shutdown Langfuse
 
 
 app = FastAPI(lifespan=lifespan)
@@ -137,22 +237,46 @@ def _extract_planning_data(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-# ── Langfuse (optional) ───────────────────────────────────────────────────────
+# ── Langfuse callback helpers ─────────────────────────────────────────────────
 
-def _make_langfuse_callback(session_id: str, trace_name: str):
-    if not os.getenv("LANGFUSE_PUBLIC_KEY"):
+def _make_langfuse_callback():
+    """
+    Create a Langfuse CallbackHandler for LangChain/LangGraph tracing.
+
+    In SDK v3+, the CallbackHandler uses the pre-initialized singleton client.
+    Trace attributes (session_id, user_id, tags) are passed via metadata in invoke().
+    """
+    if not _langfuse_enabled:
         return None
     try:
         from langfuse.langchain import CallbackHandler
-        return CallbackHandler(session_id=session_id, trace_name=trace_name)
+        # v3+ pattern: no constructor args, uses singleton client
+        return CallbackHandler()
     except Exception as e:
         logger.warning("Langfuse callback unavailable: %s", e)
         return None
 
 
-def _build_config(session_id: str, trace_name: str = "") -> dict:
-    cfg: dict = {"configurable": {"thread_id": session_id}}
-    lf = _make_langfuse_callback(session_id, trace_name or session_id)
+def _build_config(session_id: str, trace_name: str = "", user_id: str = "") -> dict:
+    """
+    Build LangGraph config with thread_id and optional Langfuse callbacks.
+
+    Trace attributes are passed via metadata (v3+ pattern):
+    - langfuse_session_id: Groups traces into a session
+    - langfuse_user_id: Associates traces with a user
+    - langfuse_tags: List of tags for filtering
+    """
+    cfg: dict = {
+        "configurable": {"thread_id": session_id},
+        "metadata": {
+            "langfuse_session_id": session_id,
+            "langfuse_trace_name": trace_name or session_id[:80],
+        },
+    }
+    if user_id:
+        cfg["metadata"]["langfuse_user_id"] = user_id
+
+    lf = _make_langfuse_callback()
     if lf:
         cfg["callbacks"] = [lf]
     return cfg
@@ -1151,6 +1275,93 @@ async def invalidate_knowledge_cache():
             {"error": str(e)},
             status_code=500,
         )
+
+
+# ── Langfuse Observability Endpoints ──────────────────────────────────────────
+
+
+@app.post("/api/feedback")
+async def submit_feedback(request: Request):
+    """
+    Submit user feedback as a Langfuse score.
+
+    Body:
+        {
+            "trace_id": "abc123...",
+            "session_id": "user-session-id",
+            "score": 5,              # 1-5 rating
+            "feedback_type": "user-rating",  # e.g., "user-rating", "relevance", "helpfulness"
+            "comment": "Great answer!"  # optional
+        }
+
+    Returns:
+        {"success": true} or {"success": false, "error": "..."}
+    """
+    try:
+        data = await request.json()
+        trace_id = data.get("trace_id")
+        session_id = data.get("session_id", "unknown")
+        score = data.get("score", 0)
+        feedback_type = data.get("feedback_type", "user-rating")
+        comment = data.get("comment", "")
+
+        if not trace_id:
+            return JSONResponse(
+                {"success": False, "error": "trace_id required"},
+                status_code=400,
+            )
+
+        if not isinstance(score, (int, float)) or score < 1 or score > 5:
+            return JSONResponse(
+                {"success": False, "error": "score must be a number between 1 and 5"},
+                status_code=400,
+            )
+
+        success = _score_trace(
+            trace_id=trace_id,
+            name=feedback_type,
+            value=float(score),
+            data_type="NUMERIC",
+            comment=comment,
+        )
+
+        if success:
+            logger.info(
+                "Feedback recorded: trace=%s, score=%s, type=%s",
+                trace_id[:8], score, feedback_type
+            )
+            return JSONResponse({"success": True})
+        else:
+            return JSONResponse(
+                {"success": False, "error": "Langfuse not enabled or scoring failed"},
+                status_code=503,
+            )
+
+    except Exception as e:
+        logger.exception("Feedback endpoint error")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500,
+        )
+
+
+@app.get("/api/observability/status")
+async def observability_status():
+    """
+    Check Langfuse observability status.
+
+    Returns:
+        {
+            "langfuse_enabled": true/false,
+            "host": "https://cloud.langfuse.com",
+            "features": ["tracing", "scoring"]
+        }
+    """
+    return JSONResponse({
+        "langfuse_enabled": _langfuse_enabled,
+        "host": os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com") if _langfuse_enabled else None,
+        "features": ["tracing", "scoring", "session_tracking"] if _langfuse_enabled else [],
+    })
 
 
 if __name__ == "__main__":

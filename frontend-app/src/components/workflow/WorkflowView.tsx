@@ -16,53 +16,48 @@ import 'reactflow/dist/style.css'
 import { useWorkflowStore } from '@/shared/state/workflowStore'
 import { agentService } from '@/shared/services/agentService'
 import { streamAgent } from '@/shared/services/streamService'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import MaterialIcon from '@/components/ui/MaterialIcon'
+import { cn } from '@/lib/utils'
 
 const API_BASE = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:8000'
 
-// ── Colours ───────────────────────────────────────────────────────────────────
+// ── MD3 Status Colors ─────────────────────────────────────────────────────────
 
-const STATUS_BORDER: Record<string, string> = {
-  idle:      '#94a3b8',
-  running:   '#3b82f6',
-  completed: '#22c55e',
-  error:     '#ef4444',
+const STATUS_COLORS: Record<string, { border: string; bg: string; text: string }> = {
+  idle:      { border: 'hsl(var(--outline-variant))', bg: 'hsl(var(--surface-container-low))', text: 'hsl(var(--on-surface-variant))' },
+  running:   { border: 'hsl(var(--secondary))', bg: 'hsl(var(--secondary-container) / 0.3)', text: 'hsl(var(--secondary))' },
+  completed: { border: 'hsl(140 60% 55%)', bg: 'hsl(140 60% 55% / 0.15)', text: 'hsl(140 65% 45%)' },
+  error:     { border: 'hsl(var(--error))', bg: 'hsl(var(--error-container) / 0.2)', text: 'hsl(var(--error))' },
 }
-const STATUS_BG: Record<string, string> = {
-  idle:      '#f8fafc',
-  running:   '#dbeafe',
-  completed: '#dcfce7',
-  error:     '#fee2e2',
-}
-const EDGE_DEFAULT = { stroke: '#cbd5e1', strokeDasharray: '5 3' }
-const EDGE_ACTIVE  = { stroke: '#3b82f6', strokeWidth: 2 }
-const EDGE_TOOL    = { stroke: '#f59e0b', strokeDasharray: '3 2' }
-const EDGE_DONE    = { stroke: '#22c55e' }
+const EDGE_DEFAULT = { stroke: 'rgba(148, 163, 184, 0.4)', strokeDasharray: '5 3' }
+const EDGE_ACTIVE  = { stroke: 'hsl(var(--secondary))', strokeWidth: 2.5 }
+const EDGE_TOOL    = { stroke: 'hsl(39 100% 55%)', strokeDasharray: '3 2' }
+const EDGE_DONE    = { stroke: 'hsl(140 60% 55%)' }
 
 const SPECIALIST_NODES = new Set(['aviation_weather', 'hk_weather', 'aircraft', 'general', 'planning'])
 
 // ── Custom nodes ──────────────────────────────────────────────────────────────
 
 function AgentNode({ data }: NodeProps) {
-  const border = STATUS_BORDER[data.status ?? 'idle']
-  const bg     = STATUS_BG[data.status ?? 'idle']
+  const colors = STATUS_COLORS[data.status ?? 'idle']
   return (
     <>
       <Handle type="target" position={Position.Top} />
       <div
-        className="px-3 py-2 rounded-xl text-xs font-medium shadow-sm border-2 min-w-[110px] text-center transition-all"
-        style={{ borderColor: border, backgroundColor: bg, color: '#1e293b' }}
+        className={cn(
+          "px-4 py-2.5 rounded-xl text-xs font-semibold min-w-[120px] text-center transition-all duration-300",
+          "backdrop-blur-xl border-2 shadow-lg"
+        )}
+        style={{ borderColor: colors.border, backgroundColor: colors.bg, color: colors.text }}
       >
         {data.status === 'running' && (
-          <div className="mb-1 h-0.5 w-full overflow-hidden rounded-full bg-blue-100">
-            <div className="h-full w-1/2 rounded-full bg-blue-400 animate-[shimmer_1s_ease-in-out_infinite]" />
+          <div className="mb-1.5 h-0.5 w-full overflow-hidden rounded-full" style={{ backgroundColor: `${colors.border}33` }}>
+            <div className="h-full w-1/2 rounded-full animate-[shimmer_1s_ease-in-out_infinite]" style={{ backgroundColor: colors.border }} />
           </div>
         )}
-        <p className="font-semibold">{data.label}</p>
+        <p className="font-bold">{data.label}</p>
         {data.details && (
-          <p className="text-[10px] text-zinc-500 mt-0.5 max-w-[130px] truncate">{data.details}</p>
+          <p className="text-[10px] mt-1 max-w-[140px] truncate opacity-70">{data.details}</p>
         )}
       </div>
       <Handle type="source" position={Position.Bottom} />
@@ -71,21 +66,23 @@ function AgentNode({ data }: NodeProps) {
 }
 
 function ToolNode({ data }: NodeProps) {
-  const border = STATUS_BORDER[data.status ?? 'idle']
-  const bg     = STATUS_BG[data.status ?? 'idle']
+  const colors = STATUS_COLORS[data.status ?? 'idle']
   return (
     <>
       <Handle type="target" position={Position.Top} />
       <div
-        className="px-2 py-1.5 rounded-lg text-[10px] shadow border-2 min-w-[100px] max-w-[160px] text-center transition-all"
-        style={{ borderColor: border, backgroundColor: bg, color: '#475569' }}
+        className={cn(
+          "px-2.5 py-2 rounded-lg text-[10px] shadow-md border-2 min-w-[100px] max-w-[160px] text-center transition-all duration-300",
+          "backdrop-blur-sm"
+        )}
+        style={{ borderColor: colors.border, backgroundColor: colors.bg, color: colors.text }}
       >
-        <p className="font-mono font-semibold truncate">{data.label}</p>
+        <p className="font-mono font-bold truncate">{data.label}</p>
         {data.input && (
-          <p className="text-zinc-400 mt-0.5 truncate">{data.input}</p>
+          <p className="mt-0.5 truncate opacity-60">{data.input}</p>
         )}
         {data.duration && (
-          <p className="text-zinc-400 mt-0.5">{data.duration}</p>
+          <p className="mt-0.5 opacity-60">{data.duration}</p>
         )}
       </div>
     </>
@@ -318,36 +315,78 @@ export default function WorkflowView() {
   }, [isExecuting, userInput, resetGraph, clearLogs, setExecuting, addLog, setNodeStatus, setNodes, setEdges])
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6 p-6">
       {/* Controls */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Workflow Execution</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <Input
-              value={userInput}
-              onChange={(e) => handleInputChange(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleExecute()}
-              placeholder="Enter your query…"
-              disabled={isExecuting}
-              className="flex-1"
-            />
-            <Button onClick={handleExecute} disabled={isExecuting || !userInput.trim()} className="gap-2">
-              {isExecuting
-                ? <><span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />Running…</>
-                : 'Execute'}
-            </Button>
-            <Button variant="outline" onClick={resetGraph} disabled={isExecuting}>Reset</Button>
-          </div>
-        </CardContent>
-      </Card>
+      <div className={cn(
+        "glass-panel rounded-2xl p-6 border border-outline-variant/20",
+        "bg-surface-container-low/80 shadow-xl"
+      )}>
+        <div className="mb-4">
+          <h2 className="text-lg font-bold text-primary">Workflow Execution</h2>
+          <p className="text-sm text-on-surface-variant mt-1">Execute and monitor multi-step agent workflows</p>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <input
+            type="text"
+            value={userInput}
+            onChange={(e) => handleInputChange(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleExecute()}
+            placeholder="Enter your query…"
+            disabled={isExecuting}
+            className={cn(
+              "flex-1 px-4 py-3 rounded-xl bg-surface-container-highest/60 backdrop-blur-xl",
+              "border border-outline-variant/20 text-on-surface placeholder:text-on-surface-variant/40",
+              "focus:outline-none focus:border-secondary/50 focus:ring-2 focus:ring-secondary/20",
+              "transition-all duration-300",
+              "disabled:opacity-40 disabled:cursor-not-allowed"
+            )}
+          />
+          <button
+            onClick={handleExecute}
+            disabled={isExecuting || !userInput.trim()}
+            className={cn(
+              "px-6 py-3 rounded-xl font-semibold text-sm uppercase tracking-wider transition-all duration-300",
+              "flex items-center justify-center gap-2",
+              !isExecuting && userInput.trim()
+                ? "user-gradient text-on-primary-container shadow-lg shadow-primary/20 hover:shadow-primary/30 hover:scale-105 hover:brightness-110 active:scale-95"
+                : "bg-surface-container text-on-surface-variant/30 cursor-not-allowed"
+            )}
+          >
+            {isExecuting ? (
+              <>
+                <MaterialIcon icon="pending" className="text-base animate-spin" />
+                <span className="hidden sm:inline">Running…</span>
+              </>
+            ) : (
+              <>
+                <MaterialIcon icon="play_arrow" className="text-base" filled />
+                <span className="hidden sm:inline">Execute</span>
+              </>
+            )}
+          </button>
+          <button
+            onClick={resetGraph}
+            disabled={isExecuting}
+            className={cn(
+              "px-6 py-3 rounded-xl font-medium text-sm transition-all duration-300",
+              "bg-surface-container-high text-on-surface border border-outline-variant/20",
+              "hover:bg-surface-container-highest hover:scale-105 hover:border-outline-variant/40",
+              "active:scale-95",
+              "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
+            )}
+          >
+            <MaterialIcon icon="restart_alt" className="text-base" />
+          </button>
+        </div>
+      </div>
 
       {/* Graph + Logs */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* ReactFlow canvas */}
-        <div className="lg:col-span-3 overflow-hidden rounded-xl border bg-card" style={{ height: 520 }}>
+        <div className={cn(
+          "lg:col-span-3 overflow-hidden rounded-2xl border border-outline-variant/20",
+          "bg-surface-container-low shadow-xl"
+        )} style={{ height: 520 }}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -361,33 +400,46 @@ export default function WorkflowView() {
             <Background />
             <Controls />
             <MiniMap
-              nodeColor={(n) => STATUS_BORDER[n.data?.status ?? 'idle']}
+              nodeColor={(n) => STATUS_COLORS[n.data?.status ?? 'idle'].border}
               maskColor="rgba(0,0,0,0.04)"
             />
           </ReactFlow>
         </div>
 
         {/* Execution logs */}
-        <Card className="lg:col-span-2 flex flex-col overflow-hidden" style={{ maxHeight: 520 }}>
-          <div className="flex items-center justify-between px-4 py-3 border-b flex-shrink-0">
-            <p className="text-sm font-semibold">Execution Log</p>
-            <Button
-              variant="ghost"
-              size="sm"
+        <div className={cn(
+          "lg:col-span-2 flex flex-col overflow-hidden rounded-2xl border border-outline-variant/20",
+          "bg-surface-container-low shadow-xl"
+        )} style={{ maxHeight: 520 }}>
+          <div className="flex items-center justify-between px-5 py-4 border-b border-outline-variant/10 flex-shrink-0">
+            <div className="flex items-center gap-2">
+              <MaterialIcon icon="terminal" className="text-secondary" />
+              <p className="text-sm font-bold text-primary">Execution Log</p>
+            </div>
+            <button
               onClick={clearLogs}
-              className="h-6 text-xs text-muted-foreground hover:text-destructive"
+              className={cn(
+                "px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200",
+                "text-on-surface-variant hover:text-error hover:bg-surface-container-high hover:scale-105",
+                "active:scale-95"
+              )}
             >
               Clear
-            </Button>
+            </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-3 space-y-0.5">
+          <div className="flex-1 overflow-y-auto p-4 space-y-1">
             {logs.length === 0
-              ? <p className="text-xs text-muted-foreground text-center py-8">No logs yet.</p>
+              ? <div className="flex flex-col items-center justify-center h-full gap-3">
+                  <MaterialIcon icon="pending_actions" className="text-4xl text-on-surface-variant/30" />
+                  <p className="text-xs text-on-surface-variant/60 text-center">No logs yet. Execute a workflow to see events.</p>
+                </div>
               : logs.map((log, idx) => (
-                  <pre key={idx} className="text-xs text-muted-foreground whitespace-pre-wrap font-mono leading-5">{log}</pre>
+                  <pre key={idx} className="text-xs text-on-surface-variant/80 whitespace-pre-wrap font-mono leading-relaxed">
+                    {log}
+                  </pre>
                 ))}
           </div>
-        </Card>
+        </div>
       </div>
     </div>
   )

@@ -20,7 +20,10 @@ import os
 import json
 from typing import Any
 
-import asyncpg
+try:
+    import asyncpg
+except ModuleNotFoundError:  # pragma: no cover - environment dependent
+    asyncpg = None
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,12 @@ class Database:
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     async def connect(self) -> None:
+        if asyncpg is None:
+            logger.warning(
+                "asyncpg not installed — database features (RAG, conversation persistence) disabled."
+            )
+            return
+
         dsn = os.getenv(_DSN_ENV)
         if not dsn:
             logger.warning(

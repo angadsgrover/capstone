@@ -1,57 +1,153 @@
 @import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('@material-symbols/font-400/outlined.css');
 
-/* ── Design System CSS Variables ──────────────────────────────── */
+/* ── Material Design 3 Color System ──────────────────────────────── */
 :root {
-  /* Light mode palette */
+  /* Light mode - Material Design 3 (placeholder, dark is primary) */
   --background: 210 40% 98%;
   --foreground: 222 47% 11%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
-  --primary: 239 84% 67%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 210 40% 96%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 210 40% 96%;
-  --muted-foreground: 215 16% 47%;
-  --accent: 210 40% 96%;
-  --accent-foreground: 222 47% 11%;
-  --destructive: 0 84% 60%;
-  --destructive-foreground: 0 0% 100%;
   --border: 214 32% 91%;
   --input: 214 32% 91%;
   --ring: 239 84% 67%;
-  --radius: 0.75rem;
+  --radius: 0.5rem;
 
-  /* Extended palette */
-  --indigo-500: 239 84% 67%;
-  --violet-500: 258 90% 66%;
-  --purple-500: 271 91% 65%;
-  --blue-500: 217 91% 60%;
-  --cyan-500: 188 94% 43%;
-  --emerald-500: 160 84% 39%;
-  --amber-500: 38 92% 50%;
+  /* Primary */
+  --primary: 248 77% 85%; /* #c0c1ff */
+  --primary-foreground: 244 100% 33%; /* #1000a9 */
+  --primary-container: 244 100% 70%; /* #8083ff */
+  --on-primary-container: 244 100% 30%; /* #0d0096 */
+  --primary-fixed: 245 100% 87%;
+  --primary-fixed-dim: 248 77% 85%;
 
-  /* Surfaces - Light */
-  --surface-glass: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.9) 0%,
-    rgba(248, 250, 252, 0.95) 100%
-  );
-  --surface-elevated: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.95) 0%,
-    rgba(248, 250, 252, 0.9) 100%
-  );
+  /* Secondary */
+  --secondary: 188 100% 69%; /* #5de6ff */
+  --secondary-foreground: 188 100% 12%; /* #00363e */
+  --secondary-container: 188 100% 45%; /* #00cbe6 */
+  --on-secondary-container: 188 100% 18%; /* #00515d */
+  --secondary-fixed: 187 100% 78%;
+  --secondary-fixed-dim: 188 93% 59%;
 
-  /* Shadows - Light */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
-  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
-  --shadow-glow-indigo: 0 0 40px rgba(99, 102, 241, 0.15);
+  /* Tertiary */
+  --tertiary: 243 77% 85%;
+  --tertiary-foreground: 243 80% 31%;
+  --tertiary-container: 244 82% 71%;
+  --on-tertiary-container: 244 100% 27%;
+  --tertiary-fixed: 245 100% 87%;
+  --tertiary-fixed-dim: 243 77% 85%;
+
+  /* Error */
+  --error: 0 100% 84%;
+  --error-foreground: 0 100% 21%;
+  --error-container: 0 100% 29%;
+  --on-error-container: 0 100% 90%;
+
+  /* Surfaces */
+  --surface: 225 50% 9%; /* #0b1326 */
+  --surface-dim: 225 50% 9%;
+  --surface-bright: 220 40% 24%;
+  --surface-variant: 222 38% 23%;
+  --surface-container-lowest: 225 60% 6%;
+  --surface-container-low: 222 45% 13%;
+  --surface-container: 222 47% 14%;
+  --surface-container-high: 220 35% 19%;
+  --surface-container-highest: 220 33% 23%;
+  --surface-tint: 248 77% 85%;
+
+  /* On-surface colors */
+  --on-surface: 225 50% 91%; /* #dae2fd */
+  --on-surface-variant: 244 20% 81%; /* #c7c4d7 */
+  --on-background: 225 50% 91%;
+  --on-primary: 244 100% 33%;
+  --on-secondary: 188 100% 12%;
+  --on-tertiary: 243 80% 31%;
+  --on-error: 0 100% 21%;
+
+  /* Outline */
+  --outline: 249 7% 60%; /* #908fa0 */
+  --outline-variant: 246 15% 30%; /* #464554 */
+
+  /* Inverse */
+  --inverse-surface: 225 50% 91%;
+  --inverse-on-surface: 220 33% 13%;
+  --inverse-primary: 244 70% 57%;
+}
+
+.dark {
+  /* Material Design 3 Dark Theme - "The Digital Aviator" */
+  --background: 225 50% 9%; /* #0b1326 - Deep navy background */
+  --foreground: 225 50% 91%; /* #dae2fd - High contrast text */
+  --border: 246 15% 30%; /* #464554 - Subtle outline */
+  --input: 220 35% 19%;
+  --ring: 248 77% 85%;
+
+  /* Primary - Indigo/Purple for critical actions */
+  --primary: 248 77% 85%; /* #c0c1ff */
+  --primary-foreground: 244 100% 33%; /* #1000a9 */
+  --primary-container: 244 100% 70%; /* #8083ff */
+  --on-primary-container: 244 100% 30%; /* #0d0096 */
+  --primary-fixed: 245 100% 87%; /* #e1e0ff */
+  --primary-fixed-dim: 248 77% 85%;
+
+  /* Secondary - Cyan for live data/highlights */
+  --secondary: 188 100% 69%; /* #5de6ff */
+  --secondary-foreground: 188 100% 12%; /* #00363e */
+  --secondary-container: 188 100% 45%; /* #00cbe6 */
+  --on-secondary-container: 188 100% 18%; /* #00515d */
+  --secondary-fixed: 187 100% 78%; /* #a2eeff */
+  --secondary-fixed-dim: 188 93% 59%; /* #2fd9f4 */
+
+  /* Tertiary - Purple/Blue accent */
+  --tertiary: 243 77% 85%; /* #bdc2ff */
+  --tertiary-foreground: 243 80% 31%; /* #131e8c */
+  --tertiary-container: 244 82% 71%; /* #7c87f3 */
+  --on-tertiary-container: 244 100% 27%; /* #081486 */
+  --tertiary-fixed: 245 100% 87%; /* #e0e0ff */
+  --tertiary-fixed-dim: 243 77% 85%;
+
+  /* Error - Red for alerts */
+  --error: 0 100% 84%; /* #ffb4ab */
+  --error-foreground: 0 100% 21%; /* #690005 */
+  --error-container: 0 100% 29%; /* #93000a */
+  --on-error-container: 0 100% 90%; /* #ffdad6 */
+
+  /* Surface hierarchy - "night sky" tonal layers */
+  --surface: 225 50% 9%; /* #0b1326 - Base surface */
+  --surface-dim: 225 50% 9%; /* #0b1326 */
+  --surface-bright: 220 40% 24%; /* #31394d */
+  --surface-variant: 222 38% 23%; /* #2d3449 */
+  --surface-container-lowest: 225 60% 6%; /* #060e20 */
+  --surface-container-low: 222 45% 13%; /* #131b2e */
+  --surface-container: 222 47% 14%; /* #171f33 */
+  --surface-container-high: 220 35% 19%; /* #222a3d */
+  --surface-container-highest: 220 33% 23%; /* #2d3449 */
+  --surface-tint: 248 77% 85%; /* #c0c1ff */
+
+  /* On-surface colors - Text and icons */
+  --on-surface: 225 50% 91%; /* #dae2fd */
+  --on-surface-variant: 244 20% 81%; /* #c7c4d7 */
+  --on-background: 225 50% 91%; /* #dae2fd */
+  --on-primary: 244 100% 33%; /* #1000a9 */
+  --on-secondary: 188 100% 12%; /* #00363e */
+  --on-tertiary: 243 80% 31%; /* #131e8c */
+  --on-error: 0 100% 21%; /* #690005 */
+
+  /* Outline - Borders and dividers */
+  --outline: 249 7% 60%; /* #908fa0 */
+  --outline-variant: 246 15% 30%; /* #464554 - 15-20% opacity recommended */
+
+  /* Inverse colors */
+  --inverse-surface: 225 50% 91%; /* #dae2fd */
+  --inverse-on-surface: 220 33% 13%; /* #283044 */
+  --inverse-primary: 244 70% 57%; /* #494bd6 */
+
+  /* Shadows - Soft ambient shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
+  --shadow-xl: 0 20px 40px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+  --shadow-glow-secondary: 0 0 40px rgba(93, 230, 255, 0.15); /* Cyan glow */
+  --shadow-glow-primary: 0 0 40px rgba(192, 193, 255, 0.15); /* Purple glow */
 
   /* Aviation status colors */
   --status-vfr: 160 84% 39%;
@@ -60,54 +156,12 @@
   --status-lifr: 0 84% 60%;
 }
 
-.dark {
-  /* Dark mode palette */
-  --background: 222 47% 6%;
-  --foreground: 210 40% 98%;
-  --card: 222 47% 8%;
-  --card-foreground: 210 40% 98%;
-  --popover: 222 47% 8%;
-  --popover-foreground: 210 40% 98%;
-  --primary: 239 84% 67%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 217 33% 17%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 217 33% 17%;
-  --muted-foreground: 215 20% 65%;
-  --accent: 217 33% 17%;
-  --accent-foreground: 210 40% 98%;
-  --destructive: 0 84% 60%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 217 33% 17%;
-  --input: 217 33% 17%;
-  --ring: 239 84% 67%;
-
-  /* Surfaces - Dark */
-  --surface-glass: linear-gradient(
-    135deg,
-    rgba(30, 41, 59, 0.8) 0%,
-    rgba(15, 23, 42, 0.9) 100%
-  );
-  --surface-elevated: linear-gradient(
-    180deg,
-    rgba(30, 41, 59, 0.6) 0%,
-    rgba(15, 23, 42, 0.8) 100%
-  );
-
-  /* Shadows - Dark */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
-  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
-  --shadow-glow-indigo: 0 0 40px rgba(99, 102, 241, 0.15);
-}
-
 /* ── Base Styles ──────────────────────────────────────────────── */
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
-  border-color: hsl(var(--border));
+  border-color: hsl(var(--outline-variant) / 0.2);
 }
 
 html {
@@ -130,26 +184,27 @@ body {
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
 
-/* Light mode background */
-body {
-  background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.08), transparent),
-    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(139, 92, 246, 0.06), transparent),
-    radial-gradient(ellipse 50% 30% at 0% 100%, rgba(99, 102, 241, 0.05), transparent);
-}
-
-/* Dark mode background */
+/* Dark mode atmospheric background */
 .dark body {
   background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.15), transparent),
-    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(139, 92, 246, 0.1), transparent),
-    radial-gradient(ellipse 50% 30% at 0% 100%, rgba(99, 102, 241, 0.08), transparent);
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(192, 193, 255, 0.08), transparent),
+    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(93, 230, 255, 0.06), transparent),
+    radial-gradient(ellipse 50% 30% at 0% 100%, rgba(192, 193, 255, 0.05), transparent);
 }
 
 #root {
   width: 100%;
   height: 100%;
   isolation: isolate;
+}
+
+/* ── Material Symbols Icon Configuration ──────────────────────── */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+.material-symbols-outlined.filled {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
 /* ── Animations ───────────────────────────────────────────────── */
@@ -199,20 +254,12 @@ body {
   animation: fade-in 0.2s ease-out;
 }
 
-.fade-in-0 {
-  animation-name: fade-in;
-}
-
 .fade-in-up {
   animation: fade-in-up 0.45s ease-out both;
 }
 
 .slide-in-from-bottom-2 {
-  animation-name: slide-in-from-bottom;
-}
-
-.duration-300 {
-  animation-duration: 300ms;
+  animation: slide-in-from-bottom 0.3s ease-out both;
 }
 
 .animate-shimmer {
@@ -242,40 +289,52 @@ body {
 }
 
 /* ── Glassmorphism Utilities ──────────────────────────────────── */
-.glass {
-  background: var(--surface-glass);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-}
-
 .glass-panel {
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
-  border: 1px solid rgba(0, 0, 0, 0.05);
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-}
-
-.dark .glass-panel {
-  background: linear-gradient(145deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9));
+  background: rgba(34, 42, 61, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .glass-panel-soft {
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.5));
-  border: 1px solid rgba(0, 0, 0, 0.04);
-  backdrop-filter: blur(16px) saturate(150%);
-  -webkit-backdrop-filter: blur(16px) saturate(150%);
-}
-
-.dark .glass-panel-soft {
-  background: linear-gradient(160deg, rgba(35, 40, 62, 0.6), rgba(25, 30, 50, 0.5));
+  background: rgba(35, 40, 62, 0.6);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
+.ai-bubble-glass {
+  background: rgba(30, 41, 59, 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(93, 230, 255, 0.1);
+}
+
+/* User message gradient */
+.user-gradient {
+  background: linear-gradient(135deg, #8083ff 0%, #c0c1ff 100%);
+}
+
+/* ── Surface Elevation Helpers ─────────────────────────────────── */
+.surface-base {
+  background: hsl(var(--surface));
+}
+
+.surface-low {
+  background: hsl(var(--surface-container-low));
+}
+
+.surface-high {
+  background: hsl(var(--surface-container-high));
+}
+
 /* ── Glow Effects ─────────────────────────────────────────────── */
-.glow-indigo {
-  box-shadow: var(--shadow-glow-indigo);
+.glow-secondary {
+  box-shadow: var(--shadow-glow-secondary);
+}
+
+.glow-primary {
+  box-shadow: var(--shadow-glow-primary);
 }
 
 /* ── Aviation Status Badges ───────────────────────────────────── */
@@ -328,8 +387,8 @@ body {
 
 /* ── Scrollbar ────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -337,29 +396,29 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.2);
+  background: hsl(var(--surface-container-highest));
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.35);
+  background: hsl(var(--outline-variant));
 }
 
 /* Firefox */
 * {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.2) transparent;
+  scrollbar-color: hsl(var(--surface-container-highest)) transparent;
 }
 
 /* ── Selection ────────────────────────────────────────────────── */
 ::selection {
-  background: hsl(var(--primary) / 0.2);
+  background: hsl(var(--secondary) / 0.3);
   color: hsl(var(--foreground));
 }
 
 /* ── Focus Visible ────────────────────────────────────────────── */
 :focus-visible {
-  outline: 2px solid hsl(var(--primary) / 0.5);
+  outline: 2px solid hsl(var(--secondary) / 0.5);
   outline-offset: 2px;
 }
 

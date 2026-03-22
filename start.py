@@ -191,7 +191,7 @@ class ServiceOrchestrator:
 
             # Determine module/script
             if name == "adsb":
-                cmd = [str(venv_python), str(mcp_dir / "server.py")]
+                cmd = [str(venv_python), "-m", "adsb_mcp_server"]
             else:
                 module = MCP_MODULES.get(name, name.replace("-", "_") + "_server")
                 cmd = [str(venv_python), "-m", module]

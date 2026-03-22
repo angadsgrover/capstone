@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Paperclip, Mic, Sparkles } from 'lucide-react'
+import MaterialIcon from '@/components/ui/MaterialIcon'
+import { cn } from '@/lib/utils'
 
 interface ChatInputProps {
   onSend: (text: string) => void
@@ -16,7 +17,7 @@ export default function ChatInput({ onSend, disabled, placeholder }: ChatInputPr
     const el = textareaRef.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [])
 
   useEffect(() => {
@@ -40,24 +41,23 @@ export default function ChatInput({ onSend, disabled, placeholder }: ChatInputPr
   const hasContent = value.trim().length > 0
 
   return (
-    <div className="p-4 border-t border-white/[0.06] bg-slate-900/60 backdrop-blur-xl">
+    <div className="relative">
+      {/* Floating glow effect */}
+      <div className={cn(
+        "absolute -inset-0.5 bg-gradient-to-r from-secondary/20 to-primary/20 rounded-2xl blur opacity-0 transition duration-500",
+        isFocused && "opacity-60"
+      )} />
+
       <form
         onSubmit={(e) => { e.preventDefault(); submit() }}
-        className={`relative flex items-end gap-3 p-1.5 rounded-2xl border transition-all duration-300 ${
+        className={cn(
+          "relative flex items-end gap-3 p-3 rounded-2xl border transition-all duration-300",
+          "bg-surface-container-highest/60 backdrop-blur-xl shadow-2xl",
           isFocused
-            ? 'bg-white/[0.04] border-indigo-500/30 shadow-lg shadow-indigo-500/10'
-            : 'bg-white/[0.02] border-white/[0.06] hover:border-white/[0.1]'
-        }`}
+            ? "border-secondary/50 shadow-secondary/10 scale-[1.01]"
+            : "border-outline-variant/20 hover:border-outline-variant/40 hover:scale-[1.005]"
+        )}
       >
-        {/* Attachment button (decorative) */}
-        <button
-          type="button"
-          className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-white/30 hover:text-white/60 hover:bg-white/[0.05] transition-all duration-200"
-          title="Attach file (coming soon)"
-        >
-          <Paperclip className="h-4 w-4" />
-        </button>
-
         {/* Textarea */}
         <div className="flex-1 relative">
           <textarea
@@ -69,52 +69,60 @@ export default function ChatInput({ onSend, disabled, placeholder }: ChatInputPr
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
             disabled={disabled}
-            placeholder={placeholder ?? 'Type your message...'}
-            className="w-full resize-none px-2 py-2.5 bg-transparent
-              text-white/90 placeholder:text-white/25 text-[14px] leading-relaxed
-              focus:outline-none
-              disabled:opacity-40 overflow-y-auto"
-            style={{ minHeight: '44px', maxHeight: '160px' }}
+            placeholder={placeholder ?? 'Ask about aviation weather...'}
+            className={cn(
+              "w-full resize-none px-3 py-3 bg-transparent text-on-surface placeholder:text-on-surface-variant/40",
+              "text-sm leading-relaxed focus:outline-none overflow-y-auto",
+              disabled && "opacity-40 cursor-not-allowed"
+            )}
+            style={{ minHeight: '44px', maxHeight: '200px' }}
             autoFocus
           />
         </div>
-
-        {/* Voice button (decorative) */}
-        <button
-          type="button"
-          className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-white/30 hover:text-white/60 hover:bg-white/[0.05] transition-all duration-200"
-          title="Voice input (coming soon)"
-        >
-          <Mic className="h-4 w-4" />
-        </button>
 
         {/* Send button */}
         <button
           type="submit"
           disabled={disabled || !hasContent}
           aria-label="Send message"
-          className={`flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-300
-            ${hasContent && !disabled
-              ? 'bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 hover:scale-105 active:scale-95'
-              : 'bg-white/[0.05] text-white/20 cursor-not-allowed'
-            }`}
+          className={cn(
+            "flex-shrink-0 h-11 px-5 rounded-xl flex items-center justify-center gap-2 transition-all duration-300 font-medium text-sm uppercase tracking-wider",
+            hasContent && !disabled
+              ? "user-gradient text-on-primary-container shadow-lg shadow-primary/20 hover:shadow-primary/30 hover:scale-105 hover:brightness-110 active:scale-95"
+              : "bg-surface-container text-on-surface-variant/30 cursor-not-allowed"
+          )}
         >
           {disabled ? (
-            <Sparkles className="h-4 w-4 animate-pulse" />
+            <>
+              <MaterialIcon icon="pending" className="text-base animate-spin" />
+              <span className="hidden sm:inline">Processing</span>
+            </>
           ) : (
-            <Send className="h-4 w-4" />
+            <>
+              <MaterialIcon icon="send" className="text-base" filled={hasContent} />
+              <span className="hidden sm:inline">Send</span>
+            </>
           )}
         </button>
       </form>
 
       {/* Helper text */}
-      <div className="flex items-center justify-between mt-2 px-2">
-        <p className="text-[10px] text-white/20">
-          Press <kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 font-mono">Enter</kbd> to send, <kbd className="px-1 py-0.5 rounded bg-white/5 border border-white/10 font-mono">Shift+Enter</kbd> for newline
-        </p>
-        <p className="text-[10px] text-white/20">
-          {value.length > 0 && `${value.length} chars`}
-        </p>
+      <div className="flex items-center justify-between mt-3 px-2">
+        <div className="flex items-center gap-4 text-[10px] text-on-surface-variant/60">
+          <span className="flex items-center gap-1.5">
+            <kbd className="px-1.5 py-0.5 rounded bg-surface-container border border-outline-variant/20 font-mono">Enter</kbd>
+            to send
+          </span>
+          <span className="flex items-center gap-1.5">
+            <kbd className="px-1.5 py-0.5 rounded bg-surface-container border border-outline-variant/20 font-mono">Shift+Enter</kbd>
+            newline
+          </span>
+        </div>
+        {value.length > 0 && (
+          <p className="text-[10px] text-on-surface-variant/60 font-mono">
+            {value.length} chars
+          </p>
+        )}
       </div>
     </div>
   )
