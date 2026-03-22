@@ -1,9 +1,67 @@
 @import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-/* ── Design system CSS variables ──────────────────────────────── */
+/* ── Design System CSS Variables ──────────────────────────────── */
 :root {
-  /* Core palette */
+  /* Light mode palette */
+  --background: 210 40% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --primary: 239 84% 67%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 210 40% 96%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --accent: 210 40% 96%;
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --ring: 239 84% 67%;
+  --radius: 0.75rem;
+
+  /* Extended palette */
+  --indigo-500: 239 84% 67%;
+  --violet-500: 258 90% 66%;
+  --purple-500: 271 91% 65%;
+  --blue-500: 217 91% 60%;
+  --cyan-500: 188 94% 43%;
+  --emerald-500: 160 84% 39%;
+  --amber-500: 38 92% 50%;
+
+  /* Surfaces - Light */
+  --surface-glass: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.9) 0%,
+    rgba(248, 250, 252, 0.95) 100%
+  );
+  --surface-elevated: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(248, 250, 252, 0.9) 100%
+  );
+
+  /* Shadows - Light */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+  --shadow-glow-indigo: 0 0 40px rgba(99, 102, 241, 0.15);
+
+  /* Aviation status colors */
+  --status-vfr: 160 84% 39%;
+  --status-mvfr: 45 93% 47%;
+  --status-ifr: 25 95% 53%;
+  --status-lifr: 0 84% 60%;
+}
+
+.dark {
+  /* Dark mode palette */
   --background: 222 47% 6%;
   --foreground: 210 40% 98%;
   --card: 222 47% 8%;
@@ -23,27 +81,12 @@
   --border: 217 33% 17%;
   --input: 217 33% 17%;
   --ring: 239 84% 67%;
-  --radius: 0.75rem;
 
-  /* Extended palette */
-  --indigo-500: 239 84% 67%;
-  --violet-500: 258 90% 66%;
-  --purple-500: 271 91% 65%;
-  --blue-500: 217 91% 60%;
-  --cyan-500: 188 94% 43%;
-  --emerald-500: 160 84% 39%;
-  --amber-500: 38 92% 50%;
-
-  /* Surfaces */
+  /* Surfaces - Dark */
   --surface-glass: linear-gradient(
     135deg,
     rgba(30, 41, 59, 0.8) 0%,
     rgba(15, 23, 42, 0.9) 100%
-  );
-  --surface-glass-soft: linear-gradient(
-    145deg,
-    rgba(30, 41, 59, 0.5) 0%,
-    rgba(15, 23, 42, 0.6) 100%
   );
   --surface-elevated: linear-gradient(
     180deg,
@@ -51,54 +94,15 @@
     rgba(15, 23, 42, 0.8) 100%
   );
 
-  /* Shadows */
+  /* Shadows - Dark */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
   --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
   --shadow-glow-indigo: 0 0 40px rgba(99, 102, 241, 0.15);
-  --shadow-glow-purple: 0 0 40px rgba(168, 85, 247, 0.12);
-
-  /* Aviation status colors */
-  --status-vfr: 160 84% 39%;
-  --status-mvfr: 45 93% 47%;
-  --status-ifr: 25 95% 53%;
-  --status-lifr: 0 84% 60%;
 }
 
-.dark {
-  --background: 222 47% 6%;
-  --foreground: 210 40% 98%;
-}
-
-/* Light mode (optional) */
-:root:not(.dark) {
-  --background: 210 40% 98%;
-  --foreground: 222 47% 11%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
-  --primary: 239 84% 67%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 210 40% 96%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 210 40% 96%;
-  --muted-foreground: 215 16% 47%;
-  --accent: 210 40% 96%;
-  --accent-foreground: 222 47% 11%;
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
-
-  --surface-glass: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.9) 0%,
-    rgba(248, 250, 252, 0.95) 100%
-  );
-  --shadow-glow-indigo: 0 0 60px rgba(99, 102, 241, 0.1);
-}
-
-/* ── Base styles ──────────────────────────────────────────────── */
+/* ── Base Styles ──────────────────────────────────────────────── */
 * {
   margin: 0;
   padding: 0;
@@ -107,6 +111,10 @@
 }
 
 html {
+  color-scheme: light dark;
+}
+
+html.dark {
   color-scheme: dark;
 }
 
@@ -114,16 +122,28 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background-color: hsl(var(--background));
-  background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.15), transparent),
-    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(139, 92, 246, 0.1), transparent),
-    radial-gradient(ellipse 50% 30% at 0% 100%, rgba(99, 102, 241, 0.08), transparent);
   color: hsl(var(--foreground));
   font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+/* Light mode background */
+body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.08), transparent),
+    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(139, 92, 246, 0.06), transparent),
+    radial-gradient(ellipse 50% 30% at 0% 100%, rgba(99, 102, 241, 0.05), transparent);
+}
+
+/* Dark mode background */
+.dark body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.15), transparent),
+    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(139, 92, 246, 0.1), transparent),
+    radial-gradient(ellipse 50% 30% at 0% 100%, rgba(99, 102, 241, 0.08), transparent);
 }
 
 #root {
@@ -161,8 +181,8 @@ body {
 }
 
 @keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
 }
 
 @keyframes pulse-subtle {
@@ -183,6 +203,10 @@ body {
   animation-name: fade-in;
 }
 
+.fade-in-up {
+  animation: fade-in-up 0.45s ease-out both;
+}
+
 .slide-in-from-bottom-2 {
   animation-name: slide-in-from-bottom;
 }
@@ -192,14 +216,21 @@ body {
 }
 
 .animate-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.animate-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(255, 255, 255, 0.05) 50%,
+    rgba(255, 255, 255, 0.1) 50%,
     transparent 100%
   );
-  background-size: 200% 100%;
-  animation: shimmer 2s infinite;
+  animation: shimmer 1.5s infinite;
 }
 
 .animate-pulse-subtle {
@@ -210,52 +241,44 @@ body {
   animation: spin-slow 3s linear infinite;
 }
 
-/* ── Glassmorphism utilities ──────────────────────────────────── */
+/* ── Glassmorphism Utilities ──────────────────────────────────── */
 .glass {
   background: var(--surface-glass);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
 }
 
-.glass-soft {
-  background: var(--surface-glass-soft);
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
+.glass-panel {
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
 }
 
-/* ── Glow effects ─────────────────────────────────────────────── */
+.dark .glass-panel {
+  background: linear-gradient(145deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.glass-panel-soft {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.5));
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+}
+
+.dark .glass-panel-soft {
+  background: linear-gradient(160deg, rgba(35, 40, 62, 0.6), rgba(25, 30, 50, 0.5));
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+/* ── Glow Effects ─────────────────────────────────────────────── */
 .glow-indigo {
   box-shadow: var(--shadow-glow-indigo);
 }
 
-.glow-purple {
-  box-shadow: var(--shadow-glow-purple);
-}
-
-/* ── Status indicators ────────────────────────────────────────── */
-.status-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-}
-
-.status-indicator::before {
-  content: '';
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 9999px;
-}
-
-.status-online::before { background: hsl(var(--emerald-500)); }
-.status-processing::before {
-  background: hsl(var(--indigo-500));
-  animation: pulse-subtle 1.5s ease-in-out infinite;
-}
-.status-error::before { background: hsl(var(--destructive)); }
-
-/* ── Aviation status badges ───────────────────────────────────── */
+/* ── Aviation Status Badges ───────────────────────────────────── */
 .pilot-status {
   display: inline-flex;
   align-items: center;
@@ -277,25 +300,29 @@ body {
 
 .pilot-status-vfr {
   color: hsl(var(--status-vfr));
-  background: hsl(var(--status-vfr) / 0.15);
+  background: hsl(var(--status-vfr) / 0.12);
+  border: 1px solid hsl(var(--status-vfr) / 0.2);
 }
 .pilot-status-vfr::before { background: hsl(var(--status-vfr)); }
 
 .pilot-status-mvfr {
   color: hsl(var(--status-mvfr));
-  background: hsl(var(--status-mvfr) / 0.15);
+  background: hsl(var(--status-mvfr) / 0.12);
+  border: 1px solid hsl(var(--status-mvfr) / 0.2);
 }
 .pilot-status-mvfr::before { background: hsl(var(--status-mvfr)); }
 
 .pilot-status-ifr {
   color: hsl(var(--status-ifr));
-  background: hsl(var(--status-ifr) / 0.15);
+  background: hsl(var(--status-ifr) / 0.12);
+  border: 1px solid hsl(var(--status-ifr) / 0.2);
 }
 .pilot-status-ifr::before { background: hsl(var(--status-ifr)); }
 
 .pilot-status-lifr {
   color: hsl(var(--status-lifr));
-  background: hsl(var(--status-lifr) / 0.15);
+  background: hsl(var(--status-lifr) / 0.12);
+  border: 1px solid hsl(var(--status-lifr) / 0.2);
 }
 .pilot-status-lifr::before { background: hsl(var(--status-lifr)); }
 
@@ -326,17 +353,17 @@ body {
 
 /* ── Selection ────────────────────────────────────────────────── */
 ::selection {
-  background: hsl(var(--primary) / 0.3);
+  background: hsl(var(--primary) / 0.2);
   color: hsl(var(--foreground));
 }
 
-/* ── Focus visible ────────────────────────────────────────────── */
+/* ── Focus Visible ────────────────────────────────────────────── */
 :focus-visible {
   outline: 2px solid hsl(var(--primary) / 0.5);
   outline-offset: 2px;
 }
 
-/* ── Reduced motion ───────────────────────────────────────────── */
+/* ── Reduced Motion ───────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *,
   ::before,

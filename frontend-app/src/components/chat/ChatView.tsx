@@ -11,6 +11,7 @@ import {
   Bot, Sparkles, Cloud, Plane, Wind, Trash2,
   MessageSquare, Zap
 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 const API_BASE = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:8000'
 const STREAMING_ENABLED = import.meta.env.VITE_ENABLE_STREAMING !== 'false'
@@ -195,10 +196,19 @@ export default function ChatView() {
   const isIdle = !isLoading && !streamingMsg
 
   return (
-    <div className="flex flex-col h-full rounded-2xl border border-white/[0.06] bg-slate-900/40 backdrop-blur-xl overflow-hidden shadow-2xl shadow-black/20">
+    <div className={cn(
+      "flex flex-col h-full rounded-2xl border backdrop-blur-xl overflow-hidden shadow-xl",
+      // Light mode
+      "border-slate-200/80 bg-white/80 shadow-slate-200/50",
+      // Dark mode
+      "dark:border-white/[0.06] dark:bg-slate-900/40 dark:shadow-black/20"
+    )}>
 
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.06] bg-white/[0.02]">
+      <div className={cn(
+        "flex items-center justify-between px-5 py-3.5 border-b",
+        "border-slate-200/80 bg-slate-50/50 dark:border-white/[0.06] dark:bg-white/[0.02]"
+      )}>
         <div className="flex items-center gap-3">
           <div className="relative">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/25">
@@ -207,19 +217,19 @@ export default function ChatView() {
             <Sparkles className="absolute -top-0.5 -right-0.5 h-3 w-3 text-amber-400" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-white/90">AI Assistant</p>
-            <p className="text-[11px] text-white/40">
+            <p className="text-sm font-semibold text-slate-900 dark:text-white/90">AI Assistant</p>
+            <p className="text-[11px] text-slate-500 dark:text-white/40">
               {isLoading ? (
                 <span className="inline-flex items-center gap-1.5">
                   <span className="relative flex h-1.5 w-1.5">
-                    <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
-                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75 animate-ping" />
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
                   </span>
                   Thinking...
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                   Ready to help
                 </span>
               )}
@@ -230,7 +240,11 @@ export default function ChatView() {
         <button
           onClick={handleClear}
           title="Clear chat (⌘K)"
-          className="flex items-center gap-1.5 h-8 px-3 text-xs font-medium rounded-lg text-white/40 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all duration-200"
+          className={cn(
+            "flex items-center gap-1.5 h-8 px-3 text-xs font-medium rounded-lg border border-transparent transition-all duration-200",
+            "text-slate-400 hover:text-red-500 hover:bg-red-50 hover:border-red-200",
+            "dark:text-white/40 dark:hover:text-red-400 dark:hover:bg-red-500/10 dark:hover:border-red-500/20"
+          )}
         >
           <Trash2 className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">Clear</span>
@@ -244,18 +258,22 @@ export default function ChatView() {
             {/* Hero illustration */}
             <div className="relative mb-8">
               <div className="absolute inset-0 blur-3xl bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-pink-500/20 rounded-full scale-150" />
-              <div className="relative w-20 h-20 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border border-white/[0.08] flex items-center justify-center shadow-2xl">
-                <MessageSquare className="h-8 w-8 text-indigo-400" />
+              <div className={cn(
+                "relative w-20 h-20 rounded-2xl border flex items-center justify-center shadow-2xl",
+                "bg-gradient-to-br from-white to-slate-50 border-slate-200",
+                "dark:bg-gradient-to-br dark:from-slate-800 dark:to-slate-900 dark:border-white/[0.08]"
+              )}>
+                <MessageSquare className="h-8 w-8 text-indigo-500" />
                 <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg">
                   <Sparkles className="h-3 w-3 text-white" />
                 </div>
               </div>
             </div>
 
-            <h3 className="text-xl font-semibold text-white mb-2">
+            <h3 className="text-xl font-semibold text-slate-900 dark:text-white mb-2">
               How can I help you today?
             </h3>
-            <p className="text-sm text-white/40 max-w-sm mb-10">
+            <p className="text-sm text-slate-500 dark:text-white/40 max-w-sm mb-10">
               Ask about aviation weather, METAR/TAF reports, flight conditions, and real-time aircraft tracking.
             </p>
 
@@ -265,13 +283,19 @@ export default function ChatView() {
                 <button
                   key={text}
                   onClick={() => sendMessage(text)}
-                  className="group text-left text-sm px-4 py-3.5 rounded-xl border border-white/[0.06] bg-white/[0.02]
-                    hover:bg-gradient-to-r hover:from-indigo-500/10 hover:to-purple-500/10 hover:border-indigo-500/20
-                    text-white/60 hover:text-white/90 transition-all duration-300"
+                  className={cn(
+                    "group text-left text-sm px-4 py-3.5 rounded-xl border transition-all duration-300",
+                    "border-slate-200 bg-white hover:bg-gradient-to-r hover:from-indigo-50 hover:to-purple-50 hover:border-indigo-200",
+                    "dark:border-white/[0.06] dark:bg-white/[0.02] dark:hover:from-indigo-500/10 dark:hover:to-purple-500/10 dark:hover:border-indigo-500/20",
+                    "text-slate-600 hover:text-slate-900 dark:text-white/60 dark:hover:text-white/90"
+                  )}
                 >
                   <div className="flex items-center gap-3">
-                    <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center group-hover:bg-indigo-500/20 transition-colors duration-300">
-                      <Icon className="h-4 w-4 text-white/40 group-hover:text-indigo-400 transition-colors duration-300" />
+                    <div className={cn(
+                      "flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors duration-300",
+                      "bg-slate-100 group-hover:bg-indigo-100 dark:bg-white/[0.05] dark:group-hover:bg-indigo-500/20"
+                    )}>
+                      <Icon className="h-4 w-4 text-slate-400 group-hover:text-indigo-500 dark:text-white/40 dark:group-hover:text-indigo-400 transition-colors duration-300" />
                     </div>
                     <span className="flex-1 group-hover:translate-x-0.5 transition-transform duration-200">{text}</span>
                   </div>
@@ -296,7 +320,10 @@ export default function ChatView() {
                   <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-indigo-500/20">
                     <Bot className="text-white h-4 w-4" />
                   </div>
-                  <div className="px-4 py-3 bg-white/[0.04] border border-white/[0.06] rounded-2xl rounded-tl-md">
+                  <div className={cn(
+                    "px-4 py-3 border rounded-2xl rounded-tl-md",
+                    "bg-slate-50 border-slate-200 dark:bg-white/[0.04] dark:border-white/[0.06]"
+                  )}>
                     <div className="flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-indigo-400/60 animate-bounce" />
                       <span className="w-2 h-2 rounded-full bg-violet-400/60 animate-bounce [animation-delay:0.15s]" />
