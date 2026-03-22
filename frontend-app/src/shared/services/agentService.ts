@@ -8,13 +8,14 @@ import {
 } from '../types/api'
 import { langchainService } from './langchainService'
 
-const API_BASE = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_AGENT_API_URL
+  ?? (import.meta.env.DEV ? 'http://localhost:8000' : window.location.origin)
 
 export const agentService = {
   /**
    * Send a message to the agent and get a response
    */
-  async sendMessage(input: string): Promise<AgentResponse> {
+  async sendMessage(input: string, sessionId?: string): Promise<AgentResponse> {
     if (langchainService.isEnabled()) {
       try {
         return await langchainService.sendMessage(input)
@@ -23,7 +24,7 @@ export const agentService = {
       }
     }
 
-    const req: AgentRequest = { input }
+    const req: AgentRequest = { input, session_id: sessionId }
     const res = await fetch(`${API_BASE}/api/agent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

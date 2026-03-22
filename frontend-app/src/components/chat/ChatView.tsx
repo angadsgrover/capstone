@@ -10,8 +10,24 @@ import ChatInput from './ChatInput'
 import MaterialIcon from '@/components/ui/MaterialIcon'
 import { cn } from '@/lib/utils'
 
-const API_BASE = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_AGENT_API_URL
+  ?? (import.meta.env.DEV ? 'http://localhost:8000' : window.location.origin)
 const STREAMING_ENABLED = import.meta.env.VITE_ENABLE_STREAMING !== 'false'
+const CHAT_SESSION_KEY = 'chatSessionId'
+
+function getOrCreateSessionId(): string {
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+    return 'web-default'
+  }
+
+  const existing = localStorage.getItem(CHAT_SESSION_KEY)
+  if (existing) return existing
+
+  const random = Math.random().toString(36).slice(2, 10)
+  const id = `web-${Date.now().toString(36)}-${random}`
+  localStorage.setItem(CHAT_SESSION_KEY, id)
+  return id
+}
 
 const QUICK_PROMPTS = [
   { text: "What's the weather in Hong Kong?", icon: 'wb_cloudy' },
@@ -31,6 +47,7 @@ export default function ChatView() {
     useChatStore()
 
   const [streamingMsg, setStreamingMsg] = useState<Message | null>(null)
+  const sessionIdRef = useRef<string>(getOrCreateSessionId())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const cancelStreamRef = useRef<(() => void) | null>(null)
 
@@ -93,7 +110,7 @@ export default function ChatView() {
     let collectedPlan: string[] | undefined
     let collectedRoute: string | undefined
 
-    const endpoint = `${API_BASE}/api/agent/stream?input=${encodeURIComponent(text)}`
+    const endpoint = `${API_BASE}/api/agent/stream?input=${encodeURIComponent(text)}&session_id=${encodeURIComponent(sessionIdRef.current)}`
 
     await new Promise<void>((resolve) => {
       cancelStreamRef.current = () => {
@@ -141,7 +158,7 @@ export default function ChatView() {
       })
     })
 
-    if (!errored && accumulated) {
+    if (!errored && accumulated.trim()) {
       const finalMsg: Message = {
         ...placeholder,
         content: accumulated,
@@ -151,6 +168,13 @@ export default function ChatView() {
         route: collectedRoute,
       }
       addMessage(finalMsg)
+    } else if (!errored) {
+      // Defensive fallback: if SSE ends without any visible token content,
+      // perform a regular request so the user never sees a silent empty response.
+      setStreamingMsg(null)
+      toast.warning('No streamed content received, falling back to standard response')
+      await sendFull(text, true)
+      return
     }
     setStreamingMsg(null)
     setLoading(false)
@@ -159,7 +183,7 @@ export default function ChatView() {
   const sendFull = async (text: string, silentLoading = false) => {
     if (!silentLoading) setLoading(true)
     try {
-      const response = await agentService.sendMessage(text)
+      const response = await agentService.sendMessage(text, sessionIdRef.current)
       const plan = response.data?.plan
       const route = response.data?.route
       const executionTrace = Array.isArray(response.data?.execution_trace)

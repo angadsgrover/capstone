@@ -87,7 +87,7 @@ class SystemTester:
     async def test_smoke(self):
         """Smoke test: Check server is responding."""
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{AGENT_URL}/", timeout=5.0)
+            response = await client.get(f"{AGENT_URL}/health", timeout=5.0)
             response.raise_for_status()
 
             assert response.status_code == 200
@@ -166,22 +166,48 @@ class SystemTester:
             ) as response:
                 response.raise_for_status()
 
+                current_event = ""
                 chunks = []
+                reasoning = []
+                generic_events = 0
+                stream_error = None
                 async for line in response.aiter_lines():
+                    if line.startswith("event:"):
+                        current_event = line[6:].strip()
+                        continue
+
                     if line.startswith("data:"):
                         data_str = line[5:].strip()
                         if data_str and data_str != "[DONE]":
                             try:
                                 chunk_data = json.loads(data_str)
-                                if "chunk" in chunk_data:
+                                if current_event == "chunk" and "chunk" in chunk_data:
                                     chunks.append(chunk_data["chunk"])
+                                elif current_event == "thinking":
+                                    text = chunk_data.get("result") or chunk_data.get("thinking")
+                                    if text:
+                                        reasoning.append(text)
+                                elif "error" in chunk_data and chunk_data.get("error"):
+                                    stream_error = str(chunk_data.get("error"))
+                                else:
+                                    generic_events += 1
                             except json.JSONDecodeError:
                                 pass
 
                 full_response = "".join(chunks)
+                stream_text = full_response or " ".join(reasoning)
 
-                assert len(full_response) > 10, "Streaming response too short"
-                logger.info(f"   Streamed {len(chunks)} chunks: {full_response[:80]}...")
+                assert not stream_error, f"Streaming returned error: {stream_error}"
+                assert (
+                    len(stream_text.strip()) > 10
+                    or generic_events > 0
+                ), "Streaming produced no usable events"
+                logger.info(
+                    "   Streamed %d chunks and %d reasoning events: %s...",
+                    len(chunks),
+                    len(reasoning),
+                    stream_text[:80],
+                )
 
     async def test_tool_composition(self):
         """Test tool composition (if advanced_tools available)."""

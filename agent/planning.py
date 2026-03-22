@@ -132,11 +132,16 @@ Context from past steps:
 Current step to execute:
 {current_step}
 
-Execute this step using available tools. Be concise and factual.
-Important constraints:
-- Do not call the same tool with identical arguments more than once.
-- Use at most 3 tool calls for this step.
-- If data is missing after tool calls, provide best-effort summary and stop.
+CRITICAL RULES:
+1. Execute this ONE step using available tools.
+2. Do not re-call tools if you already have data from past steps.
+3. Maximum 4 tool calls for this step. After 4 calls, summarize what you have.
+4. If a tool returns an error or empty data, note it and move on.
+5. Be concise and factual in your response.
+6. Tool selection must match intent:
+    - METAR/TAF/ICAO airport weather -> aviation tools (`get_metar`, `get_taf`)
+    - Hong Kong civic weather -> HK tools (`get_current_weather`, warnings/forecast)
+    - Never use `get_current_weather` to answer a METAR/TAF request.
 """
 
 

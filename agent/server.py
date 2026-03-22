@@ -634,6 +634,7 @@ async def stream_chat(input: str = "", session_id: str = "default"):
         current_specialist = ""
         tool_start_times: Dict[str, float] = {}
         step_counts: Dict[str, int] = {}
+        streamed_chunk_counts: Dict[str, int] = {}
         router_start = 0.0
         request_id = f"{session_id}:{uuid.uuid4().hex}"
 
@@ -656,6 +657,7 @@ async def stream_chat(input: str = "", session_id: str = "default"):
                 if kind == "on_chain_start" and node in SPECIALIST_NODES:
                     current_specialist = node
                     step_counts[node] = 0
+                    streamed_chunk_counts[node] = 0
                     router_dur = int((time.monotonic() - router_start) * 1000) if router_start else 0
                     yield f"event: route\ndata: {json.dumps({'route': node, 'specialist': node, 'duration': router_dur, 'timestamp': ts})}\n\n"
 
@@ -690,6 +692,8 @@ async def stream_chat(input: str = "", session_id: str = "default"):
                     chunk = ev["data"]["chunk"]
                     token = chunk.content if hasattr(chunk, "content") else ""
                     if token:
+                        parent = current_specialist or node
+                        streamed_chunk_counts[parent] = streamed_chunk_counts.get(parent, 0) + 1
                         yield f"event: chunk\ndata: {json.dumps({'chunk': token})}\n\n"
 
                 # ── Thinking/reasoning events ────────────────────────────────
@@ -719,6 +723,10 @@ async def stream_chat(input: str = "", session_id: str = "default"):
                         tc_names = _tool_call_names(tool_calls)
                         yield f"event: thinking\ndata: {json.dumps({'type': 'reasoning', 'thinking': f'Step {step_num}: Planning - {tc_names}', 'step': step_num, 'timestamp': ts})}\n\n"
                     elif content:
+                        # Some providers do not emit token chunks for every model end event.
+                        # Emit a synthetic chunk so clients always receive visible answer text.
+                        if streamed_chunk_counts.get(parent, 0) == 0:
+                            yield f"event: chunk\ndata: {json.dumps({'chunk': content})}\n\n"
                         step_num = step_counts.get(parent, 0) + 1
                         step_counts[parent] = step_num
                         preview = content[:120].replace("\n", " ")

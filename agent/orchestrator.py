@@ -258,6 +258,10 @@ Tools available:
   • HK weather            — get_current_weather, get_weather_forecast, get_weather_warnings
   • Aircraft tracking     — ADS-B live, history, callsign/registration/area search
 
+Tool-selection guardrails:
+    • If the user asks for METAR/TAF or provides airport ICAO/IATA context, use aviation tools (`get_metar`/`get_taf`).
+    • Do NOT use HK civic weather tools (`get_current_weather`) for METAR/TAF requests.
+
 For complex queries:
   1. Identify what data is needed
   2. Resolve location names to ICAO codes
@@ -343,8 +347,12 @@ def _build_graph(
     def _maybe_wrap_with_healing(tools: List[StructuredTool]) -> List[StructuredTool]:
         """Optionally wrap tools with self-healing capability."""
         if ENABLE_SELF_HEALING and HEALING_AVAILABLE:
-            llm_config = _resolve_llm_config({})
-            return wrap_tools_with_healing(tools, max_retries=2, llm_config=llm_config)
+            # MCP tools already include robust retry/dedup/error handling in the
+            # transport layer. Wrapping StructuredTools here creates nested tool
+            # events (wrapper + inner MCP call), which inflates call counts and
+            # can trigger apparent call storms in telemetry/UI.
+            logger.info("Self-healing wrappers are skipped for MCP tools to avoid nested duplicate calls.")
+            return tools
         return tools
 
     # ── Specialist sub-graphs (create_react_agent) ─────────────────────────────
@@ -386,6 +394,25 @@ def _build_graph(
             "weather briefing", "aviation weather", "airport weather",
         )
 
+        aircraft_tokens = (
+            "aircraft", "ads-b", "adsb", "flight tracking", "callsign",
+            "registration", "icao24", "squawk", "arrivals", "departures",
+            "flying over", "air traffic", "live flights",
+        )
+
+        planning_tokens = ("compare", "versus", "vs", "both", "difference", "differences")
+
+        # Planning override first for explicit comparison/sequencing queries.
+        if any(token in latest_lower for token in planning_tokens) and ENABLE_PLANNING and PLANNING_AVAILABLE:
+            logger.info("Router override: explicit comparison forced to planning")
+            return {"route": "planning"}
+
+        # Aircraft/traffic intent should route to ADS-B specialist before
+        # location-based HK overrides.
+        if any(token in latest_lower for token in aircraft_tokens):
+            logger.info("Router override: aircraft intent forced to aircraft")
+            return {"route": "aircraft"}
+
         # Check aviation intent FIRST - highest priority
         if any(token in latest_lower for token in aviation_tokens):
             logger.info("Router override: aviation intent forced to aviation_weather")
@@ -399,13 +426,16 @@ def _build_graph(
         )
 
         hk_tokens = ("hong kong", "hkg", "vhhh", "hkia")
-        planning_tokens = ("compare", "versus", "vs", "both", "difference", "differences")
+        hk_airport_tokens = ("airport", "hkg", "vhhh", "hkia", "metar", "taf")
 
         if any(token in latest_lower for token in hk_tokens) and not any(
             token in latest_lower for token in planning_tokens
         ):
-            # Only route to HK weather for civic/general weather questions
-            if any(token in latest_lower for token in hk_weather_tokens):
+            # Route civic/general HK weather to HK specialist unless airport-specific intent.
+            is_airport_context = any(token in latest_lower for token in hk_airport_tokens)
+            if any(token in latest_lower for token in hk_weather_tokens) or (
+                "weather" in latest_lower and not is_airport_context
+            ):
                 logger.info("Router override: HK civic weather forced to hk_weather")
                 return {"route": "hk_weather"}
 
@@ -413,10 +443,6 @@ def _build_graph(
             # (METAR/TAF, flight-category style briefings).
             logger.info("Router override: HK airport context forced to aviation_weather")
             return {"route": "aviation_weather"}
-
-        if any(token in latest_lower for token in planning_tokens) and ENABLE_PLANNING and PLANNING_AVAILABLE:
-            logger.info("Router override: explicit comparison forced to planning")
-            return {"route": "planning"}
 
         response = router_llm.invoke([
             SystemMessage(content=ROUTER_PROMPT),

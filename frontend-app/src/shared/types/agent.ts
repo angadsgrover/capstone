@@ -37,6 +37,7 @@ export interface Message {
 
 export interface AgentRequest {
   input: string
+  session_id?: string
   context?: Record<string, unknown>
 }
 

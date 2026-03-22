@@ -40,6 +40,24 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
+def _env_int(name: str, default: int) -> int:
+    """Parse integer env vars safely, tolerating inline comments and spaces."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    # Accept values like "900 # 15 min" from .env files with inline comments.
+    candidate = raw.split("#", 1)[0].strip()
+    if not candidate:
+        return default
+
+    try:
+        return int(candidate)
+    except ValueError:
+        logger.warning("Invalid %s=%r; falling back to %d", name, raw, default)
+        return default
+
+
 def _should_enable_cache() -> bool:
     """Check if cache should be enabled based on environment."""
     if os.getenv("CACHE_ENABLED", "true").lower() == "false":
@@ -75,10 +93,10 @@ class CacheManager:
         self._enabled = _should_enable_cache()
 
         # TTL defaults (seconds)
-        self.ttl_weather = int(os.getenv("CACHE_TTL_WEATHER", "900"))      # 15 min
-        self.ttl_rag = int(os.getenv("CACHE_TTL_RAG", "3600"))            # 1 hour
-        self.ttl_knowledge = int(os.getenv("CACHE_TTL_KNOWLEDGE", "86400"))  # 24 hours
-        self.ttl_llm = int(os.getenv("CACHE_TTL_LLM", "300"))             # 5 min
+        self.ttl_weather = _env_int("CACHE_TTL_WEATHER", 900)      # 15 min
+        self.ttl_rag = _env_int("CACHE_TTL_RAG", 3600)            # 1 hour
+        self.ttl_knowledge = _env_int("CACHE_TTL_KNOWLEDGE", 86400)  # 24 hours
+        self.ttl_llm = _env_int("CACHE_TTL_LLM", 300)             # 5 min
 
     async def init(self) -> None:
         """Initialize Redis connection."""

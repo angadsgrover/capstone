@@ -118,10 +118,7 @@ class ToolComposer:
 
                 try:
                     # Execute tool
-                    if asyncio.iscoroutinefunction(tool.func):
-                        result = await tool.afunc(**resolved_params)
-                    else:
-                        result = tool.func(**resolved_params)
+                    result = await tool.ainvoke(resolved_params)
 
                     results.append({"step": step_idx, "tool": tool_name, "result": result})
                     logger.debug("Step %d (%s) → %s", step_idx, tool_name, str(result)[:100])
@@ -285,10 +282,7 @@ async def execute_with_healing(
     for attempt in range(max_retries):
         try:
             # Execute tool
-            if asyncio.iscoroutinefunction(tool.func):
-                result = await tool.afunc(**current_params)
-            else:
-                result = tool.func(**current_params)
+            result = await tool.ainvoke(current_params)
 
             logger.info("Tool %s succeeded on attempt %d", tool.name, attempt + 1)
             return result
@@ -429,10 +423,7 @@ async def execute_with_retry(
 
     for attempt in range(max_retries):
         try:
-            if asyncio.iscoroutinefunction(tool.func):
-                return await tool.afunc(**params)
-            else:
-                return tool.func(**params)
+            return await tool.ainvoke(params)
 
         except Exception as e:
             last_error = e
@@ -470,16 +461,11 @@ def wrap_tool_with_healing(
     Returns:
         StructuredTool with self-healing capability
     """
-    original_func = tool.func
-
     async def healing_wrapper(**kwargs):
         """Execute with self-healing retry."""
         try:
             # First attempt
-            if asyncio.iscoroutinefunction(original_func):
-                return await tool.afunc(**kwargs)
-            else:
-                return original_func(**kwargs)
+            return await tool.ainvoke(kwargs)
 
         except Exception as first_error:
             logger.warning("Tool %s failed: %s. Attempting self-healing...", tool.name, first_error)
@@ -506,10 +492,7 @@ def wrap_tool_with_healing(
                     current_params = fixed_params
 
                     # Retry with fixed params
-                    if asyncio.iscoroutinefunction(original_func):
-                        return await tool.afunc(**current_params)
-                    else:
-                        return original_func(**current_params)
+                    return await tool.ainvoke(current_params)
 
                 except Exception as retry_error:
                     logger.warning("Retry %d failed: %s", attempt + 1, retry_error)

@@ -24,20 +24,30 @@ logging.basicConfig(
 MAX_TOOL_OUTPUT_CHARS = 8_000
 
 # Tool-call governance to prevent fan-out storms and duplicate work.
-MAX_TOOL_CALLS_PER_REQUEST = int(os.getenv("MCP_MAX_TOOL_CALLS_PER_REQUEST", "30"))
+# These limits are per-REQUEST, not per-step. For planning mode with multiple
+# airports, we need higher limits since each step may query different airports.
+MAX_TOOL_CALLS_PER_REQUEST = int(os.getenv("MCP_MAX_TOOL_CALLS_PER_REQUEST", "80"))
 TOOL_CACHE_TTL_SECONDS = int(os.getenv("MCP_TOOL_CACHE_TTL_SECONDS", "300"))
-MAX_IDENTICAL_CALLS_PER_REQUEST = int(os.getenv("MCP_MAX_IDENTICAL_CALLS_PER_REQUEST", "1"))
-MAX_TOOL_NAME_CALLS_PER_REQUEST = int(os.getenv("MCP_MAX_TOOL_NAME_CALLS_PER_REQUEST", "3"))
 
-# Tools that are allowed more calls (e.g., lookup tools that may have different params)
+# Identical parameter calls (exact same tool + same args) are blocked after this count
+MAX_IDENTICAL_CALLS_PER_REQUEST = int(os.getenv("MCP_MAX_IDENTICAL_CALLS_PER_REQUEST", "1"))
+
+# Per-tool-name limits. These apply to the SAME tool with DIFFERENT parameters.
+# For multi-airport queries, we need higher limits.
+MAX_TOOL_NAME_CALLS_PER_REQUEST = int(os.getenv("MCP_MAX_TOOL_NAME_CALLS_PER_REQUEST", "15"))
+
+# Tools that commonly need multiple calls with different parameters
 MULTI_CALL_TOOLS = frozenset({
     "lookup_airport_codes",
-    "get_metar",  # multiple airports
-    "get_taf",    # multiple airports
+    "get_metar",           # multiple airports in planning
+    "get_taf",             # multiple airports in planning
     "get_arrivals_by_airport",
     "get_departures_by_airport",
+    "get_states",          # different bounding boxes
+    "get_search_radius",   # different coordinates
+    "get_pireps",          # different regions
 })
-MAX_MULTI_CALL_TOOL_REQUESTS = int(os.getenv("MCP_MAX_MULTI_CALL_TOOL_REQUESTS", "5"))
+MAX_MULTI_CALL_TOOL_REQUESTS = int(os.getenv("MCP_MAX_MULTI_CALL_TOOL_REQUESTS", "8"))
 
 _request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_request_id", default="")
 _cache_lock = asyncio.Lock()
@@ -81,6 +91,60 @@ def _cache_key(tool_name: str, kwargs: Dict[str, Any]) -> str:
 def _normalize_kwargs(tool_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize semantically equivalent MCP tool arguments for better dedup hits."""
     normalized = {k: v for k, v in kwargs.items() if v is not None}
+
+    # Canonicalize common scalar/list forms so semantically identical calls
+    # share the same cache key.
+    int_fields = {"hours", "hours_back", "limit", "max_results"}
+    float_fields = {"lat", "lon", "radius", "radius_nm"}
+    uppercase_fields = {
+        "icao",
+        "iata",
+        "station",
+        "stations",
+        "airport",
+        "airport_code",
+        "departure_airport",
+        "arrival_airport",
+    }
+
+    def _norm_scalar(field: str, value: Any) -> Any:
+        if isinstance(value, str):
+            text = value.strip()
+            if field == "lang":
+                return text.lower()
+
+            if field in int_fields:
+                try:
+                    return int(text)
+                except Exception:
+                    return text
+
+            if field in float_fields:
+                try:
+                    return float(text)
+                except Exception:
+                    return text
+
+            if field in uppercase_fields:
+                # Handle comma-separated station lists such as "vhhh, egll".
+                if "," in text:
+                    parts = [p.strip().upper() for p in text.split(",") if p.strip()]
+                    if parts:
+                        return ",".join(parts)
+                return text.upper()
+
+            return text
+
+        if isinstance(value, (int, float, bool)):
+            return value
+
+        return value
+
+    for field, value in list(normalized.items()):
+        if isinstance(value, list):
+            normalized[field] = [_norm_scalar(field, v) for v in value]
+        else:
+            normalized[field] = _norm_scalar(field, value)
 
     if tool_name in {
         "get_current_weather",
@@ -261,8 +325,8 @@ class MCPServer:
 
                 if request_id:
                     request_cached = _request_cache.setdefault(request_id, {})
-                    if key in request_cached:
-                        return request_cached[key]
+                    key_counts = _request_key_counts.setdefault(request_id, {})
+                    key_count = key_counts.get(key, 0)
 
                     # Determine limit based on tool type
                     tool_limit = (
@@ -274,20 +338,26 @@ class MCPServer:
                     tool_counts = _request_tool_counts.setdefault(request_id, {})
                     tool_count = tool_counts.get(tool.name, 0)
                     if tool_count >= tool_limit:
+                        logging.warning(f"Tool limit hit: {tool.name} called {tool_count} times")
                         return (
-                            f"Tool repetition guard triggered for '{tool.name}' "
-                            f"after {tool_limit} calls. "
-                            "Reuse existing outputs and continue synthesis."
+                            f"[LIMIT] Tool '{tool.name}' has been called {tool_limit} times already. "
+                            f"Use the data you already have and proceed with your analysis."
                         )
 
-                    key_counts = _request_key_counts.setdefault(request_id, {})
-                    key_count = key_counts.get(key, 0)
+                    # Strong duplicate guard: once a key has been called successfully or not,
+                    # don't allow identical retries in the same request.
                     if key_count >= MAX_IDENTICAL_CALLS_PER_REQUEST:
+                        logging.debug(f"Duplicate call hard-blocked: {tool.name} with same params")
                         return (
-                            f"Duplicate-call guard triggered for '{tool.name}' with identical parameters "
-                            f"after {MAX_IDENTICAL_CALLS_PER_REQUEST} calls. "
-                            "Reuse prior result and continue synthesis."
+                            f"[DUPLICATE_BLOCKED] '{tool.name}' was already called with these exact "
+                            "parameters in this request. Do not call it again. "
+                            "Synthesize a final answer from available results and explicitly note any "
+                            "missing live data."
                         )
+
+                    # If the same call already completed and is cached in-request, reuse it.
+                    if key in request_cached:
+                        return request_cached[key]
 
                     existing = _request_inflight.get(inflight_key)
                     if existing is not None:
@@ -295,9 +365,10 @@ class MCPServer:
                     else:
                         count = _request_call_counts.get(request_id, 0)
                         if count >= MAX_TOOL_CALLS_PER_REQUEST:
+                            logging.warning(f"Total tool call limit hit: {count} calls")
                             return (
-                                f"Tool call limit reached for this request "
-                                f"({MAX_TOOL_CALLS_PER_REQUEST}). Reuse gathered data and summarize."
+                                f"[LIMIT] Maximum tool calls ({MAX_TOOL_CALLS_PER_REQUEST}) reached. "
+                                f"Synthesize your answer using the data already gathered."
                             )
                         _request_call_counts[request_id] = count + 1
                         tool_counts[tool.name] = tool_count + 1
@@ -312,11 +383,14 @@ class MCPServer:
                 return await wait_for
 
             if not own_call:
-                return ""
+                # Edge case: request context dedup hit but no inflight/cache
+                # This shouldn't happen normally, but return helpful message
+                return f"[Tool {tool.name} skipped - already queried with same parameters]"
 
             try:
                 result = await session.call_tool(tool.name, arguments=norm_kwargs)
             except Exception as exc:
+                logging.error(f"Tool {tool.name} failed: {exc}")
                 if request_id:
                     async with _cache_lock:
                         fut = _request_inflight.pop(inflight_key, None)
@@ -341,6 +415,24 @@ class MCPServer:
                     output[:MAX_TOOL_OUTPUT_CHARS]
                     + f"\n\n[...output truncated at {MAX_TOOL_OUTPUT_CHARS} chars"
                     f" — {len(output) - MAX_TOOL_OUTPUT_CHARS} chars omitted...]"
+                )
+
+            # Some MCP tools encode missing data as JSON null / empty strings.
+            # Replace with explicit guidance so the agent doesn't keep retrying.
+            stripped_output = output.strip()
+            is_no_data = stripped_output.lower() in {"", "null", "none"}
+            if not is_no_data and stripped_output:
+                try:
+                    is_no_data = json.loads(stripped_output) is None
+                except Exception:
+                    is_no_data = False
+
+            if is_no_data:
+                args_text = json.dumps(norm_kwargs, sort_keys=True, default=str)
+                output = (
+                    f"[NO_DATA] Tool '{tool.name}' returned no data for arguments {args_text}. "
+                    "Do not call this tool again with the same parameters in this request. "
+                    "Provide a best-effort answer and clearly state that live data is currently unavailable."
                 )
 
             async with _cache_lock:
