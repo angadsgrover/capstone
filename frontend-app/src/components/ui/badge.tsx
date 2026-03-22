@@ -8,23 +8,23 @@ const badgeVariants = cva(
     variants: {
       variant: {
         default:
-          'border-indigo-500/20 bg-indigo-500/10 text-indigo-600 dark:text-indigo-300',
+          'border-primary/30 bg-primary/12 text-primary',
         secondary:
-          'border-slate-500/20 bg-slate-500/10 text-slate-600 dark:text-slate-300',
+          'border-secondary/30 bg-secondary/12 text-secondary',
         destructive:
-          'border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-300',
+          'border-error/30 bg-error/12 text-error',
         outline:
-          'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300',
+          'border-outline-variant/25 text-on-surface-variant',
         success:
-          'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300',
+          'border-[hsl(var(--status-vfr)/0.3)] bg-[hsl(var(--status-vfr)/0.12)] text-[hsl(var(--status-vfr))]',
         warning:
-          'border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-300',
+          'border-[hsl(var(--status-ifr)/0.3)] bg-[hsl(var(--status-ifr)/0.12)] text-[hsl(var(--status-ifr))]',
         info:
-          'border-blue-500/20 bg-blue-500/10 text-blue-600 dark:text-blue-300',
+          'border-[hsl(var(--secondary)/0.3)] bg-[hsl(var(--secondary)/0.12)] text-secondary',
         purple:
-          'border-purple-500/20 bg-purple-500/10 text-purple-600 dark:text-purple-300',
+          'border-tertiary/30 bg-tertiary/12 text-tertiary',
         live:
-          'border-emerald-500/30 bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 animate-pulse',
+          'border-secondary/35 bg-secondary/15 text-secondary animate-pulse',
       },
       size: {
         default: 'px-2 py-0.5 text-[10px]',

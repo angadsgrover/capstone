@@ -11,44 +11,42 @@ export default function ToolCallsSection({ toolCalls }: ToolCallsSectionProps) {
 
   if (!toolCalls || toolCalls.length === 0) return null
 
-  const successCount = toolCalls.filter(t => t.status === 'success').length
-  const errorCount = toolCalls.filter(t => t.status === 'error').length
-  const runningCount = toolCalls.filter(t => t.status === 'running').length
+  const successCount = toolCalls.filter((t) => t.status === 'success').length
+  const errorCount = toolCalls.filter((t) => t.status === 'error').length
+  const runningCount = toolCalls.filter((t) => t.status === 'running').length
 
   return (
-    <div className="mt-4 rounded-xl border border-amber-500/20 overflow-hidden bg-gradient-to-br from-amber-500/5 to-orange-500/5 backdrop-blur-sm">
-      {/* Header */}
+    <div className="mt-4 rounded-xl border border-secondary/20 overflow-hidden bg-gradient-to-br from-secondary/8 to-primary/8 backdrop-blur-sm">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2.5 px-4 py-3 text-xs font-medium text-amber-300 hover:bg-white/[0.02] transition-colors"
+        className="w-full flex items-center gap-2.5 px-4 py-3 text-xs font-medium text-secondary hover:bg-surface-container-high/40 transition-colors"
       >
-        <div className="flex items-center justify-center w-6 h-6 rounded-lg bg-amber-500/15">
+        <div className="flex items-center justify-center w-6 h-6 rounded-lg bg-secondary/15">
           {isExpanded ? (
-            <ChevronDown className="h-3.5 w-3.5 text-amber-400" />
+            <ChevronDown className="h-3.5 w-3.5 text-secondary" />
           ) : (
-            <ChevronRight className="h-3.5 w-3.5 text-amber-400" />
+            <ChevronRight className="h-3.5 w-3.5 text-secondary" />
           )}
         </div>
-        <Wrench className="h-4 w-4 text-amber-400" />
+        <Wrench className="h-4 w-4 text-secondary" />
         <span className="font-semibold">Tools Used</span>
-        <span className="text-amber-400/60">({toolCalls.length})</span>
+        <span className="text-secondary/70">({toolCalls.length})</span>
 
-        {/* Status badges */}
         <div className="flex gap-2 ml-auto">
           {runningCount > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-500/15 text-blue-300 rounded-md text-[10px] font-medium border border-blue-500/10 animate-pulse">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-primary/15 text-primary rounded-md text-[10px] font-medium border border-primary/10 animate-pulse">
               <Loader2 className="h-3 w-3 animate-spin" />
               {runningCount}
             </span>
           )}
           {successCount > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded-md text-[10px] font-medium border border-emerald-500/10">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-secondary/15 text-secondary rounded-md text-[10px] font-medium border border-secondary/10">
               <CheckCircle className="h-3 w-3" />
               {successCount}
             </span>
           )}
           {errorCount > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-500/15 text-red-300 rounded-md text-[10px] font-medium border border-red-500/10">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-error/15 text-error rounded-md text-[10px] font-medium border border-error/10">
               <AlertCircle className="h-3 w-3" />
               {errorCount}
             </span>
@@ -56,7 +54,6 @@ export default function ToolCallsSection({ toolCalls }: ToolCallsSectionProps) {
         </div>
       </button>
 
-      {/* Expanded content */}
       {isExpanded && (
         <div className="px-4 pb-4 space-y-2">
           {toolCalls.map((tool, idx) => (
@@ -73,45 +70,41 @@ function ToolCallItem({ tool }: { tool: ToolCall }) {
 
   const statusConfig = {
     running: {
-      icon: <Loader2 className="h-3.5 w-3.5 text-blue-400 animate-spin" />,
-      bg: 'bg-blue-500/10',
-      border: 'border-blue-500/20',
-      glow: 'shadow-blue-500/10'
+      icon: <Loader2 className="h-3.5 w-3.5 text-primary animate-spin" />,
+      bg: 'bg-primary/10',
+      border: 'border-primary/20',
     },
     success: {
-      icon: <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />,
-      bg: 'bg-emerald-500/10',
-      border: 'border-emerald-500/20',
-      glow: ''
+      icon: <CheckCircle className="h-3.5 w-3.5 text-secondary" />,
+      bg: 'bg-secondary/10',
+      border: 'border-secondary/20',
     },
     error: {
-      icon: <AlertCircle className="h-3.5 w-3.5 text-red-400" />,
-      bg: 'bg-red-500/10',
-      border: 'border-red-500/20',
-      glow: ''
-    }
+      icon: <AlertCircle className="h-3.5 w-3.5 text-error" />,
+      bg: 'bg-error/10',
+      border: 'border-error/20',
+    },
   }
 
   const status = tool.status ? (statusConfig[tool.status] || statusConfig.success) : statusConfig.success
 
   return (
-    <div className={`rounded-xl border ${status.border} ${status.bg} overflow-hidden transition-all duration-200 ${showDetails ? 'ring-1 ring-white/10' : ''}`}>
-      {/* Tool header */}
+    <div className={`rounded-xl border ${status.border} ${status.bg} overflow-hidden transition-all duration-200 ${showDetails ? 'ring-1 ring-outline-variant/20' : ''}`}>
       <button
         onClick={() => setShowDetails(!showDetails)}
-        className="w-full flex items-center gap-3 px-3 py-2.5 text-xs hover:bg-white/[0.02] transition-colors"
+        className="w-full flex items-center gap-3 px-3 py-2.5 text-xs hover:bg-surface-container-high/30 transition-colors"
       >
-        <div className="flex-shrink-0 w-6 h-6 rounded-lg bg-white/[0.05] flex items-center justify-center">
+        <div className="flex-shrink-0 w-6 h-6 rounded-lg bg-surface-container-high/70 flex items-center justify-center">
           {status.icon}
         </div>
 
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          <span className="font-mono font-semibold text-white/90 truncate">
+          <span className="font-mono font-semibold text-on-surface truncate">
             {tool.name}
           </span>
 
           {tool.retries && tool.retries > 0 && (
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-orange-500/15 text-orange-300 rounded text-[9px] font-medium">
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-tertiary/15 text-tertiary rounded text-[9px] font-medium">
               <RotateCcw className="h-2.5 w-2.5" />
               {tool.retries}
             </span>
@@ -119,55 +112,50 @@ function ToolCallItem({ tool }: { tool: ToolCall }) {
         </div>
 
         {tool.duration !== undefined && (
-          <span className="inline-flex items-center gap-1 text-[10px] text-white/40 font-mono">
+          <span className="inline-flex items-center gap-1 text-[10px] text-on-surface-variant/80 font-mono">
             <Zap className="h-3 w-3" />
             {tool.duration}ms
           </span>
         )}
 
-        <ChevronDown className={`h-3.5 w-3.5 text-white/30 transition-transform duration-200 ${showDetails ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`h-3.5 w-3.5 text-on-surface-variant/70 transition-transform duration-200 ${showDetails ? 'rotate-180' : ''}`} />
       </button>
 
-      {/* Tool details */}
       {showDetails && (
-        <div className="px-3 pb-3 space-y-3 border-t border-white/[0.06]">
-          {/* Input */}
+        <div className="px-3 pb-3 space-y-3 border-t border-outline-variant/15">
           <div className="pt-3">
-            <div className="text-[10px] font-semibold text-white/40 uppercase tracking-wider mb-1.5">
+            <div className="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider mb-1.5">
               Input
             </div>
-            <pre className="bg-slate-950/60 text-white/80 px-3 py-2 rounded-lg text-[11px] overflow-x-auto font-mono border border-white/[0.06]">
+            <pre className="bg-surface-container-lowest/85 text-on-surface px-3 py-2 rounded-lg text-[11px] overflow-x-auto font-mono border border-outline-variant/15">
               {JSON.stringify(tool.input, null, 2)}
             </pre>
           </div>
 
-          {/* Output */}
           {tool.output && (
             <div>
-              <div className="text-[10px] font-semibold text-emerald-400/80 uppercase tracking-wider mb-1.5">
+              <div className="text-[10px] font-semibold text-secondary uppercase tracking-wider mb-1.5">
                 Output
               </div>
-              <pre className="bg-slate-950/60 text-emerald-300/80 px-3 py-2 rounded-lg text-[11px] overflow-x-auto font-mono max-h-32 overflow-y-auto border border-emerald-500/10">
+              <pre className="bg-surface-container-lowest/85 text-on-surface px-3 py-2 rounded-lg text-[11px] overflow-x-auto font-mono max-h-32 overflow-y-auto border border-secondary/15">
                 {typeof tool.output === 'string' ? tool.output : JSON.stringify(tool.output, null, 2)}
               </pre>
             </div>
           )}
 
-          {/* Error */}
           {tool.error && (
             <div>
-              <div className="text-[10px] font-semibold text-red-400/80 uppercase tracking-wider mb-1.5">
+              <div className="text-[10px] font-semibold text-error uppercase tracking-wider mb-1.5">
                 Error
               </div>
-              <pre className="bg-red-950/30 text-red-300 px-3 py-2 rounded-lg text-[11px] overflow-x-auto font-mono border border-red-500/20">
+              <pre className="bg-error/10 text-error px-3 py-2 rounded-lg text-[11px] overflow-x-auto font-mono border border-error/20">
                 {tool.error}
               </pre>
             </div>
           )}
 
-          {/* Timing */}
           {tool.startTime && (
-            <div className="flex items-center gap-2 pt-2 border-t border-white/[0.04] text-[10px] text-white/30">
+            <div className="flex items-center gap-2 pt-2 border-t border-outline-variant/10 text-[10px] text-on-surface-variant/80">
               <Clock className="h-3 w-3" />
               <span>Started: {new Date(tool.startTime).toLocaleTimeString()}</span>
               {tool.endTime && (

@@ -26,13 +26,13 @@ const API_BASE = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:8000'
 const STATUS_COLORS: Record<string, { border: string; bg: string; text: string }> = {
   idle:      { border: 'hsl(var(--outline-variant))', bg: 'hsl(var(--surface-container-low))', text: 'hsl(var(--on-surface-variant))' },
   running:   { border: 'hsl(var(--secondary))', bg: 'hsl(var(--secondary-container) / 0.3)', text: 'hsl(var(--secondary))' },
-  completed: { border: 'hsl(140 60% 55%)', bg: 'hsl(140 60% 55% / 0.15)', text: 'hsl(140 65% 45%)' },
+  completed: { border: 'hsl(var(--status-vfr))', bg: 'hsl(var(--status-vfr) / 0.15)', text: 'hsl(var(--status-vfr))' },
   error:     { border: 'hsl(var(--error))', bg: 'hsl(var(--error-container) / 0.2)', text: 'hsl(var(--error))' },
 }
-const EDGE_DEFAULT = { stroke: 'rgba(148, 163, 184, 0.4)', strokeDasharray: '5 3' }
+const EDGE_DEFAULT = { stroke: 'hsl(var(--outline-variant) / 0.55)', strokeDasharray: '5 3' }
 const EDGE_ACTIVE  = { stroke: 'hsl(var(--secondary))', strokeWidth: 2.5 }
-const EDGE_TOOL    = { stroke: 'hsl(39 100% 55%)', strokeDasharray: '3 2' }
-const EDGE_DONE    = { stroke: 'hsl(140 60% 55%)' }
+const EDGE_TOOL    = { stroke: 'hsl(var(--tertiary))', strokeDasharray: '3 2' }
+const EDGE_DONE    = { stroke: 'hsl(var(--status-vfr))' }
 
 const SPECIALIST_NODES = new Set(['aviation_weather', 'hk_weather', 'aircraft', 'general', 'planning'])
 
@@ -401,7 +401,7 @@ export default function WorkflowView() {
             <Controls />
             <MiniMap
               nodeColor={(n) => STATUS_COLORS[n.data?.status ?? 'idle'].border}
-              maskColor="rgba(0,0,0,0.04)"
+              maskColor="hsl(var(--background) / 0.35)"
             />
           </ReactFlow>
         </div>

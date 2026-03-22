@@ -25,8 +25,8 @@ interface LogEvent {
 const TYPE_CONFIG: Record<string, { icon: string; colorClass: string; bgClass: string; label: string }> = {
   node: { icon: 'circle', colorClass: 'text-secondary', bgClass: 'bg-secondary/10 border-secondary/30', label: 'Node' },
   routing_decision: { icon: 'alt_route', colorClass: 'text-primary', bgClass: 'bg-primary/10 border-primary/30', label: 'Route' },
-  tool: { icon: 'build', colorClass: 'text-amber-500', bgClass: 'bg-amber-500/10 border-amber-500/30', label: 'Tool' },
-  reasoning: { icon: 'psychology', colorClass: 'text-emerald-500', bgClass: 'bg-emerald-500/10 border-emerald-500/30',  label: 'Think' },
+  tool: { icon: 'build', colorClass: 'text-tertiary', bgClass: 'bg-tertiary/10 border-tertiary/30', label: 'Tool' },
+  reasoning: { icon: 'psychology', colorClass: 'text-secondary', bgClass: 'bg-secondary/10 border-secondary/30',  label: 'Think' },
   internal: { icon: 'settings', colorClass: 'text-on-surface-variant/50', bgClass: 'bg-surface-container border-outline-variant/30', label: 'Internal' },
   error: { icon: 'error', colorClass: 'text-error', bgClass: 'bg-error/10 border-error/30', label: 'Error' },
 }
@@ -34,7 +34,7 @@ const TYPE_CONFIG: Record<string, { icon: string; colorClass: string; bgClass: s
 const STATUS_COLORS: Record<string, string> = {
   started: 'bg-secondary/10 text-secondary border-secondary/30',
   running: 'bg-secondary/10 text-secondary border-secondary/30',
-  completed: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30',
+  completed: 'bg-[hsl(var(--status-vfr)/0.12)] text-[hsl(var(--status-vfr))] border-[hsl(var(--status-vfr)/0.3)]',
   failed: 'bg-error/10 text-error border-error/30',
   error: 'bg-error/10 text-error border-error/30',
 }

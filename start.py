@@ -22,9 +22,11 @@ import asyncio
 import logging
 import os
 import signal
+import socket
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -82,6 +84,7 @@ class ServiceOrchestrator:
     def __init__(self, args):
         self.args = args
         self.processes: Dict[str, subprocess.Popen] = {}
+        self._log_threads: List[threading.Thread] = []
         self.shutdown_requested = False
 
         # Register signal handlers
@@ -107,6 +110,49 @@ class ServiceOrchestrator:
             return shared_py
 
         return None
+
+    def _is_port_in_use(self, port: int, host: str = "127.0.0.1") -> bool:
+        """Check whether a TCP port is already in use."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            return sock.connect_ex((host, port)) == 0
+
+    def _stream_pipe(self, name: str, stream, level: int, channel: str) -> None:
+        """Continuously stream subprocess output into the main logger."""
+        try:
+            for line in iter(stream.readline, ""):
+                if not line:
+                    break
+                text = line.rstrip()
+                if text:
+                    logger.log(level, "[%s:%s] %s", name, channel, text)
+        except Exception as e:
+            logger.debug("Log stream closed for %s:%s (%s)", name, channel, e)
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    def _start_log_streamers(self, name: str, process: subprocess.Popen) -> None:
+        """Attach background log streamers for subprocess stdout/stderr."""
+        if process.stdout:
+            t_out = threading.Thread(
+                target=self._stream_pipe,
+                args=(name, process.stdout, logging.INFO, "stdout"),
+                daemon=True,
+            )
+            t_out.start()
+            self._log_threads.append(t_out)
+
+        if process.stderr:
+            t_err = threading.Thread(
+                target=self._stream_pipe,
+                args=(name, process.stderr, logging.ERROR, "stderr"),
+                daemon=True,
+            )
+            t_err.start()
+            self._log_threads.append(t_err)
 
     # ── Pre-flight checks ─────────────────────────────────────────────────────
 
@@ -181,6 +227,15 @@ class ServiceOrchestrator:
 
             port = ports[name]
 
+            if self._is_port_in_use(port):
+                logger.warning(
+                    "  ⚠️  Port %s already in use; assuming existing %s SSE server at http://localhost:%s/sse",
+                    port,
+                    name,
+                    port,
+                )
+                continue
+
             env = os.environ.copy()
             env.update({
                 "PYTHONPATH": str(mcp_dir),
@@ -204,10 +259,17 @@ class ServiceOrchestrator:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    bufsize=1,
                 )
 
                 self.processes[f"mcp-{name}"] = process
+                self._start_log_streamers(f"mcp-{name}", process)
                 logger.info(f"  ✅ {name} → http://localhost:{port}/sse (pid {process.pid})")
+
+                time.sleep(0.5)
+                if process.poll() is not None:
+                    logger.error("  ❌ %s exited during startup (code %s)", name, process.returncode)
+                    return False
 
             except Exception as e:
                 logger.error(f"  ❌ Failed to start {name}: {e}")
@@ -222,6 +284,10 @@ class ServiceOrchestrator:
     def start_agent_server(self) -> bool:
         """Start FastAPI agent server."""
         logger.info("🚀 Starting FastAPI agent server...")
+
+        if self._is_port_in_use(8000):
+            logger.warning("  ⚠️  Port 8000 already in use; assuming existing agent API at http://localhost:8000")
+            return True
 
         venv_python = self._venv_python_for_service(AGENT_DIR)
         if not venv_python:
@@ -258,10 +324,17 @@ class ServiceOrchestrator:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                bufsize=1,
             )
 
             self.processes["agent"] = process
+            self._start_log_streamers("agent", process)
             logger.info(f"  ✅ Agent API → http://localhost:8000 (pid {process.pid})")
+
+            time.sleep(0.8)
+            if process.poll() is not None:
+                logger.error("  ❌ Agent exited during startup (code %s)", process.returncode)
+                return False
 
             # Wait for agent to be ready
             logger.info("⏳ Waiting 10s for agent to initialize...")
@@ -280,6 +353,10 @@ class ServiceOrchestrator:
             return True
 
         logger.info("🚀 Starting Vite frontend...")
+
+        if self._is_port_in_use(5173):
+            logger.warning("  ⚠️  Port 5173 already in use; assuming existing frontend at http://localhost:5173")
+            return True
 
         node_modules = FRONTEND_DIR / "node_modules"
         if not node_modules.exists():
@@ -303,10 +380,17 @@ class ServiceOrchestrator:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                bufsize=1,
             )
 
             self.processes["frontend"] = process
+            self._start_log_streamers("frontend", process)
             logger.info(f"  ✅ Frontend → http://localhost:5173 (pid {process.pid})")
+
+            time.sleep(0.8)
+            if process.poll() is not None:
+                logger.error("  ❌ Frontend exited during startup (code %s)", process.returncode)
+                return False
 
             return True
 
@@ -443,13 +527,7 @@ class ServiceOrchestrator:
                         for name, process in list(self.processes.items()):
                             if process.poll() is not None:
                                 logger.error(f"❌ {name} exited unexpectedly (code {process.returncode})")
-
-                                # Show last few lines of stderr
-                                if process.stderr:
-                                    stderr_lines = process.stderr.read().split("\n")[-5:]
-                                    for line in stderr_lines:
-                                        if line.strip():
-                                            logger.error(f"   {line}")
+                                return False
 
                 except asyncio.CancelledError:
                     pass

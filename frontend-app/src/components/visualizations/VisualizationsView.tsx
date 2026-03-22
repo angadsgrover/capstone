@@ -13,9 +13,9 @@ const FLIGHT_CATEGORY_LABELS = ['VFR', 'MVFR', 'IFR', 'LIFR']
 function flightCategoryClass(cat?: string) {
   const normalized = (cat ?? '').toUpperCase()
   if (normalized === 'LIFR') return 'inline-flex items-center justify-center px-3 py-1 rounded-lg text-xs font-semibold border bg-error/10 text-error border-error/30'
-  if (normalized === 'IFR') return 'inline-flex items-center justify-center px-3 py-1 rounded-lg text-xs font-semibold border bg-amber-500/10 text-amber-600 border-amber-500/30'
-  if (normalized === 'MVFR') return 'inline-flex items-center justify-center px-3 py-1 rounded-lg text-xs font-semibold border bg-secondary/10 text-secondary border-secondary/30'
-  return 'inline-flex items-center justify-center px-3 py-1 rounded-lg text-xs font-semibold border bg-emerald-500/10 text-emerald-600 border-emerald-500/30'
+  if (normalized === 'IFR') return 'inline-flex items-center justify-center px-3 py-1 rounded-lg text-xs font-semibold border bg-[hsl(var(--status-ifr)/0.12)] text-[hsl(var(--status-ifr))] border-[hsl(var(--status-ifr)/0.3)]'
+  if (normalized === 'MVFR') return 'inline-flex items-center justify-center px-3 py-1 rounded-lg text-xs font-semibold border bg-[hsl(var(--status-mvfr)/0.12)] text-[hsl(var(--status-mvfr))] border-[hsl(var(--status-mvfr)/0.3)]'
+  return 'inline-flex items-center justify-center px-3 py-1 rounded-lg text-xs font-semibold border bg-[hsl(var(--status-vfr)/0.12)] text-[hsl(var(--status-vfr))] border-[hsl(var(--status-vfr)/0.3)]'
 }
 
 function miniLinePath(values: number[], width = 220, height = 58) {
@@ -83,11 +83,11 @@ export default function VisualizationsView() {
         style: {
           fontSize: 11,
           borderRadius: 12,
-          border: '1px solid rgba(137, 154, 255, 0.42)',
-          background: 'linear-gradient(145deg, rgba(255,255,255,0.82), rgba(255,255,255,0.56))',
+          border: '1px solid hsl(var(--primary) / 0.35)',
+          background: 'linear-gradient(145deg, hsl(var(--surface) / 0.92), hsl(var(--surface-container-low) / 0.88))',
           backdropFilter: 'blur(8px)',
-          boxShadow: '0 8px 20px rgba(118, 133, 205, 0.16)',
-          color: '#2d355f',
+          boxShadow: '0 8px 20px hsl(var(--surface-container-lowest) / 0.3)',
+          color: 'hsl(var(--on-surface))',
           padding: '6px 8px',
         },
       }))
@@ -96,7 +96,7 @@ export default function VisualizationsView() {
         source: e.source,
         target: e.target,
         animated: true,
-        style: { stroke: '#6f86ff', strokeWidth: 1.65 },
+        style: { stroke: 'hsl(var(--primary))', strokeWidth: 1.65 },
       }))
       setPathNodes(nodes)
       setPathEdges(edges)
@@ -229,7 +229,7 @@ export default function VisualizationsView() {
               "bg-surface-container-high/50 hover:bg-surface-container-highest/60 hover:scale-105 transition-all duration-300"
             )}>
               <div className="flex items-center gap-2 mb-2">
-                <MaterialIcon icon="warning" className="text-amber-500" />
+                <MaterialIcon icon="warning" className="text-[hsl(var(--status-ifr))]" />
                 <p className="text-xs uppercase tracking-wide text-on-surface-variant font-semibold">High-Risk Airports</p>
               </div>
               <p className="mt-1 text-2xl font-extrabold tracking-tight text-primary">{riskAirports}</p>
@@ -388,7 +388,7 @@ export default function VisualizationsView() {
         )}>
           <div className="px-5 py-4 border-b border-outline-variant/10 bg-surface-container-high/30">
             <div className="flex items-center gap-2">
-              <MaterialIcon icon="flight_takeoff" className="text-base text-emerald-500" />
+              <MaterialIcon icon="flight_takeoff" className="text-base text-[hsl(var(--status-vfr))]" />
               <h3 className="text-sm font-bold text-primary">Flight Paths Network</h3>
             </div>
           </div>
@@ -423,7 +423,7 @@ export default function VisualizationsView() {
               "bg-surface-container-highest/60 shadow-inner backdrop-blur"
             )}>
               <ReactFlow nodes={pathNodes} edges={pathEdges} fitView>
-                <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="rgba(93, 230, 255, 0.15)" />
+                <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="hsl(var(--secondary) / 0.18)" />
                 <Controls />
               </ReactFlow>
             </div>

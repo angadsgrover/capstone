@@ -4,7 +4,7 @@
 
 /* ── Material Design 3 Color System ──────────────────────────────── */
 :root {
-  /* Light mode - Material Design 3 (placeholder, dark is primary) */
+  /* Light mode - Material Design 3 */
   --background: 210 40% 98%;
   --foreground: 222 47% 11%;
   --border: 214 32% 91%;
@@ -43,33 +43,33 @@
   --on-error-container: 0 100% 90%;
 
   /* Surfaces */
-  --surface: 225 50% 9%; /* #0b1326 */
-  --surface-dim: 225 50% 9%;
-  --surface-bright: 220 40% 24%;
-  --surface-variant: 222 38% 23%;
-  --surface-container-lowest: 225 60% 6%;
-  --surface-container-low: 222 45% 13%;
-  --surface-container: 222 47% 14%;
-  --surface-container-high: 220 35% 19%;
-  --surface-container-highest: 220 33% 23%;
+  --surface: 0 0% 100%;
+  --surface-dim: 210 30% 96%;
+  --surface-bright: 0 0% 100%;
+  --surface-variant: 225 20% 92%;
+  --surface-container-lowest: 0 0% 100%;
+  --surface-container-low: 220 28% 97%;
+  --surface-container: 220 24% 95%;
+  --surface-container-high: 221 22% 92%;
+  --surface-container-highest: 222 20% 89%;
   --surface-tint: 248 77% 85%;
 
   /* On-surface colors */
-  --on-surface: 225 50% 91%; /* #dae2fd */
-  --on-surface-variant: 244 20% 81%; /* #c7c4d7 */
-  --on-background: 225 50% 91%;
+  --on-surface: 222 47% 11%;
+  --on-surface-variant: 224 14% 38%;
+  --on-background: 222 47% 11%;
   --on-primary: 244 100% 33%;
   --on-secondary: 188 100% 12%;
   --on-tertiary: 243 80% 31%;
   --on-error: 0 100% 21%;
 
   /* Outline */
-  --outline: 249 7% 60%; /* #908fa0 */
-  --outline-variant: 246 15% 30%; /* #464554 */
+  --outline: 225 10% 55%;
+  --outline-variant: 223 16% 70%;
 
   /* Inverse */
-  --inverse-surface: 225 50% 91%;
-  --inverse-on-surface: 220 33% 13%;
+  --inverse-surface: 225 50% 13%;
+  --inverse-on-surface: 225 50% 92%;
   --inverse-primary: 244 70% 57%;
 }
 
@@ -290,29 +290,29 @@ body {
 
 /* ── Glassmorphism Utilities ──────────────────────────────────── */
 .glass-panel {
-  background: rgba(34, 42, 61, 0.7);
+  background: hsl(var(--surface-container-high) / 0.7);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid hsl(var(--outline-variant) / 0.2);
 }
 
 .glass-panel-soft {
-  background: rgba(35, 40, 62, 0.6);
+  background: hsl(var(--surface-container) / 0.6);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid hsl(var(--outline-variant) / 0.16);
 }
 
 .ai-bubble-glass {
-  background: rgba(30, 41, 59, 0.4);
+  background: hsl(var(--surface-container-lowest) / 0.6);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(93, 230, 255, 0.1);
+  border: 1px solid hsl(var(--secondary) / 0.12);
 }
 
 /* User message gradient */
 .user-gradient {
-  background: linear-gradient(135deg, #8083ff 0%, #c0c1ff 100%);
+  background: linear-gradient(135deg, hsl(var(--primary-container)) 0%, hsl(var(--primary)) 100%);
 }
 
 /* ── Surface Elevation Helpers ─────────────────────────────────── */

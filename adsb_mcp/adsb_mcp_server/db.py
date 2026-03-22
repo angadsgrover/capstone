@@ -216,3 +216,9 @@ def setup_aircraft_db(db_path: str = "aircraft.db") -> sqlite3.Connection:
     """)
     conn.commit()
     return conn
+
+
+def init_db(db_path: str = "aircraft.db") -> None:
+    """Compatibility initializer expected by server lifespan startup."""
+    conn = setup_aircraft_db(db_path=db_path)
+    conn.close()

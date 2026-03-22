@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -19,6 +20,7 @@ from db import Database
 from memory import DualMemoryManager  # Upgraded from MemoryManager
 from cache import CacheManager
 from orchestrator import init_graph
+import mcp_client as mcp_module
 
 logger = logging.getLogger(__name__)
 
@@ -335,6 +337,8 @@ async def _run_with_events(user_input: str, session_id: str) -> None:
     INTERNAL_LABELS = {"agent": "LLM Call", "tools": "Tool Execution"}
 
     try:
+        request_id = f"{session_id}:{uuid.uuid4().hex}"
+        mcp_module.set_request_context(request_id)
         async for ev in global_graph.astream_events(
             {"messages": [HumanMessage(content=user_input)]},
             config=config,
@@ -416,7 +420,8 @@ async def _run_with_events(user_input: str, session_id: str) -> None:
 
                 # Emit plan details when the planner node completes.
                 if node == "plan":
-                    output = ev.get("data", {}).get("output", {})
+                    raw_output = ev.get("data", {}).get("output", {})
+                    output = raw_output if isinstance(raw_output, dict) else {}
                     plan_steps = output.get("original_plan") or output.get("plan") or []
                     if plan_steps:
                         await _push(session_id, {
@@ -556,6 +561,7 @@ async def _run_with_events(user_input: str, session_id: str) -> None:
             "details": f"Error: {e}", "timestamp": _now_iso(), "raw": {"error": str(e)},
         })
     finally:
+        mcp_module.clear_request_context()
         await _push(session_id, {"__done__": True})
 
 
@@ -629,8 +635,10 @@ async def stream_chat(input: str = "", session_id: str = "default"):
         tool_start_times: Dict[str, float] = {}
         step_counts: Dict[str, int] = {}
         router_start = 0.0
+        request_id = f"{session_id}:{uuid.uuid4().hex}"
 
         try:
+            mcp_module.set_request_context(request_id)
             async for ev in global_graph.astream_events(
                 {"messages": [HumanMessage(content=input)]},
                 config=config,
@@ -653,7 +661,8 @@ async def stream_chat(input: str = "", session_id: str = "default"):
 
                 # Planning internals: emit explicit plan + execution-step telemetry
                 if kind == "on_chain_end" and node == "plan":
-                    output = ev.get("data", {}).get("output", {})
+                    raw_output = ev.get("data", {}).get("output", {})
+                    output = raw_output if isinstance(raw_output, dict) else {}
                     plan_steps = output.get("original_plan") or output.get("plan") or []
                     if plan_steps:
                         yield (
@@ -662,13 +671,15 @@ async def stream_chat(input: str = "", session_id: str = "default"):
                         )
 
                 if kind == "on_chain_end" and node == "execute":
-                    output = ev.get("data", {}).get("output", {})
-                    trace = output.get("execution_trace") or []
-                    if trace:
+                    raw_output = ev.get("data", {}).get("output", {})
+                    output = raw_output if isinstance(raw_output, dict) else {}
+                    raw_trace = output.get("execution_trace") or []
+                    trace = raw_trace if isinstance(raw_trace, list) else []
+                    if trace and isinstance(trace[-1], dict):
                         latest = trace[-1]
                         step_num = int(latest.get("step", len(trace)))
                         task = latest.get("task", "")
-                        preview = latest.get("result", "")[:160].replace("\n", " ")
+                        preview = str(latest.get("result", ""))[:160].replace("\n", " ")
                         yield (
                             "event: thinking\n"
                             f"data: {json.dumps({'type': 'reasoning', 'thinking': f'Step {step_num}: {task}', 'result': preview, 'step': step_num, 'timestamp': ts})}\n\n"
@@ -735,6 +746,8 @@ async def stream_chat(input: str = "", session_id: str = "default"):
             logger.exception("Streaming error for session %s", session_id)
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
             yield "event: end\ndata: {}\n\n"
+        finally:
+            mcp_module.clear_request_context()
 
     return StreamingResponse(
         stream_tokens(),
@@ -763,7 +776,9 @@ async def chat_endpoint(request: Request):
         return JSONResponse({"response": cached_response, "cached": True})
 
     config = _build_config(session_id, trace_name=user_input[:80])
+    request_id = f"{session_id}:{uuid.uuid4().hex}"
     try:
+        mcp_module.set_request_context(request_id)
         result = await global_graph.ainvoke(
             {"messages": [HumanMessage(content=user_input)]},
             config=config,
@@ -808,6 +823,8 @@ async def chat_endpoint(request: Request):
     except Exception as e:
         logger.exception("Chat endpoint error for session %s", session_id)
         return JSONResponse({"response": f"Error: {e}"}, status_code=500)
+    finally:
+        mcp_module.clear_request_context()
 
 
 # ── Knowledge Graph / Document Ingestion Endpoints ────────────────────────────

@@ -133,6 +133,10 @@ Current step to execute:
 {current_step}
 
 Execute this step using available tools. Be concise and factual.
+Important constraints:
+- Do not call the same tool with identical arguments more than once.
+- Use at most 3 tool calls for this step.
+- If data is missing after tool calls, provide best-effort summary and stop.
 """
 
 
@@ -161,10 +165,38 @@ async def execute_step(
     )
 
     # Invoke executor agent
-    result = await executor_agent.ainvoke(
-        {"messages": [SystemMessage(content=system_prompt), HumanMessage(content=current_step)]},
-        config=config,
-    )
+    executor_limit = int(config.get("executor_recursion_limit", 12))
+    exec_config = {
+        "callbacks": config.get("callbacks"),
+        "recursion_limit": executor_limit,
+    }
+
+    try:
+        result = await executor_agent.ainvoke(
+            {"messages": [SystemMessage(content=system_prompt), HumanMessage(content=current_step)]},
+            config=exec_config,
+        )
+    except Exception as e:
+        if "GRAPH_RECURSION_LIMIT" in str(e) or "Recursion limit" in str(e):
+            logger.warning("Step recursion limit reached for '%s': %s", current_step, e)
+            step_result = (
+                "Step execution stopped early due to repeated tool-call recursion. "
+                "Proceeding with available context."
+            )
+            return {
+                "past_steps": [*past_steps, (current_step, step_result)],
+                "execution_trace": [
+                    *state.get("execution_trace", []),
+                    {
+                        "step": str(state.get("current_step_idx", 0) + 1),
+                        "task": current_step,
+                        "result": step_result,
+                    },
+                ],
+                "plan": state["plan"][1:],
+                "current_step_idx": state.get("current_step_idx", 0) + 1,
+            }
+        raise
 
     # Extract response
     ai_msgs = [m for m in result["messages"] if isinstance(m, AIMessage)]

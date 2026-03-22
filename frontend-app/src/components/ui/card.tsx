@@ -6,15 +6,9 @@ const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElemen
     <div
       ref={ref}
       className={cn(
-        // Light mode
-        'rounded-2xl border border-slate-200/80 bg-white/90 backdrop-blur-xl',
-        'shadow-lg shadow-slate-200/50',
-        // Dark mode
-        'dark:border-white/[0.06] dark:bg-slate-900/60 dark:backdrop-blur-2xl',
-        'dark:shadow-2xl dark:shadow-black/20',
-        // Text
-        'text-slate-900 dark:text-white/90',
-        // Transitions
+        'rounded-2xl border border-outline-variant/15 bg-surface-container-high/70 backdrop-blur-xl',
+        'shadow-lg shadow-[hsl(var(--surface-container-lowest)/0.35)]',
+        'text-on-surface',
         'transition-all duration-300',
         className,
       )}
@@ -36,7 +30,7 @@ const CardTitle = React.forwardRef<HTMLParagraphElement, React.HTMLAttributes<HT
     <h3
       ref={ref}
       className={cn(
-        'text-base font-semibold leading-none tracking-tight text-slate-900 dark:text-white',
+        'text-base font-semibold leading-none tracking-tight text-on-surface',
         className
       )}
       {...props}
@@ -49,7 +43,7 @@ const CardDescription = React.forwardRef<HTMLParagraphElement, React.HTMLAttribu
   ({ className, ...props }, ref) => (
     <p
       ref={ref}
-      className={cn('text-sm text-slate-500 dark:text-white/50', className)}
+      className={cn('text-sm text-on-surface-variant', className)}
       {...props}
     />
   ),

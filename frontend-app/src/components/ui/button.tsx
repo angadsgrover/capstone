@@ -3,22 +3,22 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98]',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 active:scale-[0.98]',
   {
     variants: {
       variant: {
         default:
-          'bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25 hover:shadow-xl hover:shadow-indigo-500/30 hover:brightness-110',
+          'user-gradient text-on-primary-container shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/30 hover:brightness-110',
         destructive:
-          'bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-lg shadow-red-500/25 hover:shadow-red-500/35',
+          'bg-[hsl(var(--error-container))] text-[hsl(var(--on-error-container))] shadow-lg shadow-[hsl(var(--error)/0.2)] hover:brightness-110',
         outline:
-          'border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800/50 backdrop-blur-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/50 hover:border-slate-300 dark:hover:border-slate-600',
+          'border border-outline-variant/20 bg-surface-container-high/70 backdrop-blur-sm text-on-surface hover:bg-surface-container-highest hover:border-secondary/30',
         secondary:
-          'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700',
+          'bg-secondary/12 text-secondary border border-secondary/30 hover:bg-secondary/20 hover:shadow-glow-secondary',
         ghost:
-          'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white',
+          'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface',
         link:
-          'text-indigo-600 dark:text-indigo-400 underline-offset-4 hover:underline',
+          'text-secondary underline-offset-4 hover:underline',
       },
       size: {
         default: 'h-10 px-5 py-2',

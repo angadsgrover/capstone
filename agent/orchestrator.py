@@ -147,6 +147,21 @@ def lookup_airport_codes(location: str, max_results: int = 10) -> str:
 
 ENABLE_PLANNING = os.getenv("ENABLE_PLANNING", "true").lower() == "true"
 ENABLE_SELF_HEALING = os.getenv("ENABLE_SELF_HEALING", "true").lower() == "true"
+PLANNING_RECURSION_LIMIT = int(os.getenv("PLANNING_RECURSION_LIMIT", "80"))
+
+
+def _resolve_llm_config(runtime_config: RunnableConfig) -> Dict[str, str]:
+    """Resolve LLM config with env fallback for planner and healing flows."""
+    if not isinstance(runtime_config, dict):
+        runtime_config = {}
+
+    raw_configurable = runtime_config.get("configurable", {})
+    configurable = raw_configurable if isinstance(raw_configurable, dict) else {}
+    return {
+        "model": configurable.get("model") or os.getenv("MODEL_CHOICE", "openai/gpt-4o-mini"),
+        "base_url": configurable.get("base_url") or os.getenv("BASE_URL", "https://openrouter.ai/api/v1"),
+        "api_key": configurable.get("api_key") or os.getenv("LLM_API_KEY", ""),
+    }
 
 # ── System prompts ────────────────────────────────────────────────────────────
 
@@ -170,12 +185,18 @@ Reply with ONLY the category name. No explanation, no punctuation, no extra word
 AVIATION_PROMPT = """\
 You are an expert aviation meteorologist. Answer step-by-step.
 
-Step 1 — Resolve ICAO: If the user mentions a place name (not a raw ICAO), call \
-`lookup_airport_codes` first.
+CRITICAL RULES:
+1. NEVER call the same tool with identical parameters more than once.
+2. If a tool returns an error or empty data, do NOT retry it—provide best-effort response.
+3. Maximum 3 tool calls per query. After 3 calls, synthesize from available data.
+
+Step 1 — Resolve ICAO: If the user mentions a place name OR a 3-letter IATA code (e.g., HKG), call \
+`lookup_airport_codes` first. VHHH=Hong Kong, EGLL=Heathrow, KJFK=JFK.
 Step 2 — Check historical context: Use `rag_search` to find similar past weather \
 conditions, trends, or relevant safety bulletins for the airport/region.
 Step 3 — Fetch live weather with the right tools:
-  • Basic airport  → get_metar + get_taf
+  • Basic airport  → get_metar (use ICAO code like VHHH, not IATA)
+  • Forecast       → get_taf
   • Route planning → get_weather_along_route + determine_flight_category
   • Area hazards   → get_pireps + get_airmets
   • Specific       → check_vfr_minimums, get_weather_by_radius
@@ -184,6 +205,14 @@ noting any relevant historical patterns or safety concerns from the RAG results.
 
 HK_PROMPT = """\
 You are a Hong Kong weather expert with live HKO data.
+
+CRITICAL RULES:
+1. NEVER call the same tool with identical parameters more than once.
+2. If a tool returns an error or empty data, do NOT retry it—provide best-effort response.
+3. Maximum 3 tool calls per query. After 3 calls, synthesize from available data.
+
+Important: HKO tools do NOT provide airport METAR/TAF. If the user asks for METAR/TAF,
+inform them this requires aviation weather tools (not available in this specialist).
 
 Step 1 — Historical context : Use `rag_search` with source_type='taf' or 'metar' to \
 find similar past conditions in the Hong Kong region.
@@ -196,6 +225,11 @@ Combine into a clear, actionable weather report, noting any relevant historical 
 
 AIRCRAFT_PROMPT = """\
 You are an aviation intelligence analyst with live ADS-B tracking.
+
+CRITICAL RULES:
+1. NEVER call the same tool with identical parameters more than once.
+2. If a tool returns an error or empty data, do NOT retry it—provide best-effort response.
+3. Maximum 4 tool calls per query. After 4 calls, synthesize from available data.
 
 Step 1 — Resolve airports: place name → call `lookup_airport_codes`.
 Step 2 — Track:
@@ -212,18 +246,23 @@ Present positions, altitudes, speeds, and routes clearly."""
 GENERAL_PROMPT = """\
 You are a comprehensive aviation and weather assistant.
 
+CRITICAL RULES:
+1. NEVER call the same tool with identical parameters more than once.
+2. If a tool returns an error or empty data, do NOT retry it—provide best-effort response.
+3. Maximum 5 tool calls per query. After 5 calls, synthesize from available data.
+
 Tools available:
   • lookup_airport_codes  — resolve place names → ICAO (call this first for any location)
   • rag_search            — search historical METAR/TAF data, safety benchmarks, and past context
-  • Aviation weather      — METAR, TAF, PIREPs, AIRMETs, flight categories, route/radius
-  • HK weather            — HKO conditions, forecasts, warnings, visibility
+  • Aviation weather      — get_metar, get_taf (use ICAO codes), PIREPs, AIRMETs, flight categories
+  • HK weather            — get_current_weather, get_weather_forecast, get_weather_warnings
   • Aircraft tracking     — ADS-B live, history, callsign/registration/area search
 
 For complex queries:
   1. Identify what data is needed
   2. Resolve location names to ICAO codes
   3. Search historical context with rag_search for relevant past data or safety info
-  4. Call each required live data tool in sequence
+  4. Call each required live data tool ONCE in sequence
   5. Synthesise a complete, well-structured response referencing both live and historical data"""
 
 
@@ -304,11 +343,7 @@ def _build_graph(
     def _maybe_wrap_with_healing(tools: List[StructuredTool]) -> List[StructuredTool]:
         """Optionally wrap tools with self-healing capability."""
         if ENABLE_SELF_HEALING and HEALING_AVAILABLE:
-            llm_config = {
-                "model": os.getenv("MODEL_CHOICE", "openai/gpt-4o-mini"),
-                "base_url": os.getenv("BASE_URL", "https://openrouter.ai/api/v1"),
-                "api_key": os.getenv("LLM_API_KEY", ""),
-            }
+            llm_config = _resolve_llm_config({})
             return wrap_tools_with_healing(tools, max_retries=2, llm_config=llm_config)
         return tools
 
@@ -339,6 +374,50 @@ def _build_graph(
     def router_node(state: AgentState) -> Dict[str, Any]:
         human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
         latest = human_msgs[-1].content if human_msgs else ""
+
+        # Deterministic overrides to avoid LLM router drift.
+        latest_lower = latest.lower()
+
+        # CRITICAL: Aviation tokens ALWAYS take priority over location tokens.
+        # This ensures "metar for vhhh" routes to aviation, not HK weather.
+        aviation_tokens = (
+            "metar", "taf", "pirep", "airmet", "sigmet", "vfr", "ifr",
+            "cloud base", "ceiling", "notam", "runway", "flight category",
+            "weather briefing", "aviation weather", "airport weather",
+        )
+
+        # Check aviation intent FIRST - highest priority
+        if any(token in latest_lower for token in aviation_tokens):
+            logger.info("Router override: aviation intent forced to aviation_weather")
+            return {"route": "aviation_weather"}
+
+        # HK civic weather tokens (NOT aviation)
+        hk_weather_tokens = (
+            "hko", "rainstorm", "typhoon signal", "warning signal",
+            "visibility hk", "hk weather", "humidity hk", "temperature hk",
+            "hong kong forecast", "hk forecast",
+        )
+
+        hk_tokens = ("hong kong", "hkg", "vhhh", "hkia")
+        planning_tokens = ("compare", "versus", "vs", "both", "difference", "differences")
+
+        if any(token in latest_lower for token in hk_tokens) and not any(
+            token in latest_lower for token in planning_tokens
+        ):
+            # Only route to HK weather for civic/general weather questions
+            if any(token in latest_lower for token in hk_weather_tokens):
+                logger.info("Router override: HK civic weather forced to hk_weather")
+                return {"route": "hk_weather"}
+
+            # Default Hong Kong airport questions to aviation tools
+            # (METAR/TAF, flight-category style briefings).
+            logger.info("Router override: HK airport context forced to aviation_weather")
+            return {"route": "aviation_weather"}
+
+        if any(token in latest_lower for token in planning_tokens) and ENABLE_PLANNING and PLANNING_AVAILABLE:
+            logger.info("Router override: explicit comparison forced to planning")
+            return {"route": "planning"}
+
         response = router_llm.invoke([
             SystemMessage(content=ROUTER_PROMPT),
             HumanMessage(content=latest),
@@ -420,13 +499,17 @@ def _build_graph(
         latest_query = human_msgs[-1].content if human_msgs else ""
 
         # Build plan-execute graph with general agent as executor
-        llm_config = config.get("configurable", {})
+        llm_config = _resolve_llm_config(config)
         plan_graph = build_plan_execute_graph(general_agent, llm_config)
 
         # Execute plan
         result = await plan_graph.ainvoke(
             {"input": latest_query},
-            config=config,
+            config={
+                "callbacks": config.get("callbacks"),
+                "recursion_limit": PLANNING_RECURSION_LIMIT,
+                "executor_recursion_limit": int(os.getenv("PLANNING_EXECUTOR_RECURSION_LIMIT", "12")),
+            },
         )
 
         # Return response as AI message
