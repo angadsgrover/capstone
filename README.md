@@ -173,8 +173,54 @@ See [MEMORY_ARCHITECTURE.md](./MEMORY_ARCHITECTURE.md) for full details.
 |--------|------|-------------|
 | POST | `/api/agent` | Non-streaming full response (conversation persisted to DB) |
 | GET | `/api/agent/stream` | SSE token streaming + tool calls |
-| POST | `/api/agent/execute` | Trigger async workflow, returns session_id |
+| POST | `/api/agent/execute` | Trigger async workflow, returns session_id + run_id |
 | GET | `/api/agent/events` | SSE rich workflow events (execution trace) |
+| GET | `/ready` | Readiness probe (graph + DB + dependency status) |
+| GET | `/api/runtime/status` | Runtime pressure and scaling limits for ops/autoscaling |
+
+### Production Scaling Controls
+
+Use these environment variables to tune multi-user throughput and protection:
+
+- `MAX_CONCURRENT_GRAPH_RUNS` (default: 120)
+- `MAX_PENDING_EVENT_STREAMS` (default: 2000)
+- `EVENT_QUEUE_MAXSIZE` (default: 512)
+- `RUN_REGISTRY_TTL_SECONDS` (default: 900)
+- `RUN_REGISTRY_CLEANUP_INTERVAL_SECONDS` (default: 60)
+- `ENABLE_ENDPOINT_RATE_LIMITING` (default: true)
+- `RATE_LIMIT_WINDOW_SECONDS` (default: 60)
+- `RATE_LIMIT_AGENT_PER_WINDOW` (default: 30)
+- `RATE_LIMIT_STREAM_PER_WINDOW` (default: 20)
+- `RATE_LIMIT_EXECUTE_PER_WINDOW` (default: 20)
+- `RATE_LIMIT_USE_CLIENT_IP` (default: true)
+
+### Auth Subject Headers (Rate-Limit Binding)
+
+For multi-tenant production, pass authenticated subject headers so quotas bind to users/tenants instead of caller-provided session IDs:
+
+- `X-User-Id`
+- `X-Tenant-Id`
+
+Set `REQUIRE_AUTH_SUBJECT=true` to reject requests without these headers.
+
+### Verified JWT Subject Extraction (Recommended)
+
+For zero-trust production deployments, verify bearer tokens in the agent instead of trusting forwarded identity headers:
+
+- `AUTH_VERIFICATION_MODE=jwt`
+- `AUTH_REQUIRE_VERIFIED_SUBJECT=true`
+- `AUTH_ALLOW_HEADER_FALLBACK=false`
+- Configure one key source: `JWT_JWKS_URL` or `JWT_PUBLIC_KEY` or `JWT_SECRET`
+- Optional claim validation: `JWT_ISSUER`, `JWT_AUDIENCE`, `JWT_ALGORITHMS`
+- Optional claim mapping: `JWT_SUBJECT_CLAIM`, `JWT_USER_ID_CLAIM`, `JWT_TENANT_ID_CLAIM`
+
+When JWT verification is enabled and fallback is disabled, requests with invalid tokens are rejected with `401`.
+
+### Queued Workflow Execution (Scale-Out)
+
+- `EXECUTION_MODE=queued` on API tier enqueues `/api/agent/execute` jobs.
+- `agent-worker` consumes Redis queue jobs and runs orchestration.
+- Workflow events and run metadata are stored in Redis (`EVENT_BACKEND=redis`) so any API replica can serve `/api/agent/events`.
 
 ### Memory & Knowledge Graph Endpoints
 

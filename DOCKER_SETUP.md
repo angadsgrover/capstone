@@ -60,6 +60,7 @@ Services started:
 - `mcp-hk-climate`
 - `mcp-adsb`
 - `agent`
+- `agent-worker` (queue consumer for `/api/agent/execute` when `EXECUTION_MODE=queued`)
 - `frontend`
 
 ### 2.3 Verify startup
@@ -73,6 +74,29 @@ Open:
 
 - Frontend: `http://localhost:80`
 - API docs: `http://localhost:8000/docs`
+
+Production hardening env highlights:
+
+```bash
+# Security / governance
+CORS_ALLOW_ORIGINS=https://your-frontend.example.com
+REQUIRE_AUTH_SUBJECT=true
+AUTH_VERIFICATION_MODE=jwt
+AUTH_REQUIRE_VERIFIED_SUBJECT=true
+AUTH_ALLOW_HEADER_FALLBACK=false
+JWT_JWKS_URL=https://your-idp.example.com/.well-known/jwks.json
+JWT_ISSUER=https://your-idp.example.com/
+JWT_AUDIENCE=capstone-agent-api
+
+# Request guards
+MAX_REQUEST_BYTES=1048576
+MAX_INPUT_CHARS=12000
+
+# Queue + distributed events
+EXECUTION_MODE=queued
+EVENT_BACKEND=redis
+WORKFLOW_QUEUE_KEY=agent:workflow:queue
+```
 
 Optional Adminer (DB UI):
 

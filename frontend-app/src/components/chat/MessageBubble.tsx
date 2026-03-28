@@ -164,12 +164,20 @@ export default function MessageBubble({ message, isStreaming }: MessageBubblePro
                   <span className="inline-block w-0.5 h-4 bg-secondary ml-0.5 animate-pulse align-text-bottom rounded-full shadow-glow-secondary" />
                 )}
 
-                {/* Thinking section */}
-                <ThinkingSection thinking={message.thinking} plan={message.plan} route={message.route} />
+                {/* Thinking section - auto-expand for complex queries */}
+                <ThinkingSection
+                  thinking={message.thinking}
+                  plan={message.plan}
+                  route={message.route}
+                  autoExpand={(message.thinking && message.thinking.length > 2) || (message.plan && message.plan.length > 2)}
+                />
 
-                {/* Tool calls */}
+                {/* Tool calls - auto-expand when > 2 tools */}
                 {message.toolCalls && message.toolCalls.length > 0 && (
-                  <ToolCallsSection toolCalls={message.toolCalls} />
+                  <ToolCallsSection
+                    toolCalls={message.toolCalls}
+                    autoExpand={message.toolCalls.length > 2}
+                  />
                 )}
               </div>
             )}

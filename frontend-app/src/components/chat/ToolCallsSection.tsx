@@ -1,52 +1,70 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { ChevronDown, ChevronRight, Wrench, CheckCircle, AlertCircle, Loader2, RotateCcw, Clock, Zap } from 'lucide-react'
 import { ToolCall } from '@/shared/types/agent'
 
 interface ToolCallsSectionProps {
   toolCalls: ToolCall[]
+  autoExpand?: boolean  // Auto-expand for complex tool sequences
 }
 
-export default function ToolCallsSection({ toolCalls }: ToolCallsSectionProps) {
-  const [isExpanded, setIsExpanded] = useState(false)
+export default function ToolCallsSection({ toolCalls, autoExpand = false }: ToolCallsSectionProps) {
+  const shouldAutoExpand = autoExpand || toolCalls.length > 2
+  const [isExpanded, setIsExpanded] = useState(shouldAutoExpand)
+
+  // Re-expand when new tools arrive
+  useEffect(() => {
+    if (shouldAutoExpand && !isExpanded) {
+      setIsExpanded(true)
+    }
+  }, [toolCalls.length])
 
   if (!toolCalls || toolCalls.length === 0) return null
 
   const successCount = toolCalls.filter((t) => t.status === 'success').length
   const errorCount = toolCalls.filter((t) => t.status === 'error').length
   const runningCount = toolCalls.filter((t) => t.status === 'running').length
+  const totalDuration = toolCalls.reduce((sum, t) => sum + (t.duration || 0), 0)
 
   return (
-    <div className="mt-4 rounded-xl border border-secondary/20 overflow-hidden bg-gradient-to-br from-secondary/8 to-primary/8 backdrop-blur-sm">
+    <div className="mt-4 rounded-xl border border-tertiary/30 overflow-hidden bg-gradient-to-br from-tertiary/12 to-secondary/10 backdrop-blur-sm shadow-lg">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2.5 px-4 py-3 text-xs font-medium text-secondary hover:bg-surface-container-high/40 transition-colors"
+        className="w-full flex items-center gap-2.5 px-4 py-3.5 text-xs font-medium text-tertiary hover:bg-surface-container-high/40 transition-colors group"
       >
-        <div className="flex items-center justify-center w-6 h-6 rounded-lg bg-secondary/15">
+        <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-tertiary/20 group-hover:bg-tertiary/30 transition-colors">
           {isExpanded ? (
-            <ChevronDown className="h-3.5 w-3.5 text-secondary" />
+            <ChevronDown className="h-4 w-4 text-tertiary" />
           ) : (
-            <ChevronRight className="h-3.5 w-3.5 text-secondary" />
+            <ChevronRight className="h-4 w-4 text-tertiary" />
           )}
         </div>
-        <Wrench className="h-4 w-4 text-secondary" />
-        <span className="font-semibold">Tools Used</span>
-        <span className="text-secondary/70">({toolCalls.length})</span>
+        <Wrench className="h-4.5 w-4.5 text-tertiary" />
+        <span className="font-bold text-sm">Tools Executed</span>
+        <span className="text-tertiary/70 font-semibold">({toolCalls.length})</span>
 
-        <div className="flex gap-2 ml-auto">
+        <div className="flex gap-2 ml-auto items-center">
+          {/* Total duration */}
+          {totalDuration > 0 && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-surface-container-high/60 text-on-surface-variant rounded-md text-[10px] font-mono font-bold border border-outline-variant/20">
+              <Zap className="h-3 w-3" />
+              {totalDuration}ms total
+            </span>
+          )}
+
           {runningCount > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-primary/15 text-primary rounded-md text-[10px] font-medium border border-primary/10 animate-pulse">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-primary/15 text-primary rounded-md text-[10px] font-bold border border-primary/10 animate-pulse">
               <Loader2 className="h-3 w-3 animate-spin" />
               {runningCount}
             </span>
           )}
           {successCount > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-secondary/15 text-secondary rounded-md text-[10px] font-medium border border-secondary/10">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-secondary/15 text-secondary rounded-md text-[10px] font-bold border border-secondary/10">
               <CheckCircle className="h-3 w-3" />
               {successCount}
             </span>
           )}
           {errorCount > 0 && (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-error/15 text-error rounded-md text-[10px] font-medium border border-error/10">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-error/15 text-error rounded-md text-[10px] font-bold border border-error/10">
               <AlertCircle className="h-3 w-3" />
               {errorCount}
             </span>
@@ -57,7 +75,7 @@ export default function ToolCallsSection({ toolCalls }: ToolCallsSectionProps) {
       {isExpanded && (
         <div className="px-4 pb-4 space-y-2">
           {toolCalls.map((tool, idx) => (
-            <ToolCallItem key={idx} tool={tool} />
+            <ToolCallItem key={idx} tool={tool} index={idx} />
           ))}
         </div>
       )}
@@ -65,7 +83,7 @@ export default function ToolCallsSection({ toolCalls }: ToolCallsSectionProps) {
   )
 }
 
-function ToolCallItem({ tool }: { tool: ToolCall }) {
+function ToolCallItem({ tool, index }: { tool: ToolCall; index: number }) {
   const [showDetails, setShowDetails] = useState(false)
 
   const statusConfig = {
@@ -92,14 +110,19 @@ function ToolCallItem({ tool }: { tool: ToolCall }) {
     <div className={`rounded-xl border ${status.border} ${status.bg} overflow-hidden transition-all duration-200 ${showDetails ? 'ring-1 ring-outline-variant/20' : ''}`}>
       <button
         onClick={() => setShowDetails(!showDetails)}
-        className="w-full flex items-center gap-3 px-3 py-2.5 text-xs hover:bg-surface-container-high/30 transition-colors"
+        className="w-full flex items-center gap-3 px-3.5 py-3 text-xs hover:bg-surface-container-high/30 transition-colors group"
       >
+        {/* Step number */}
+        <div className="flex-shrink-0 w-6 h-6 rounded-lg bg-tertiary/20 flex items-center justify-center text-tertiary text-[10px] font-bold shadow-sm group-hover:scale-110 transition-transform">
+          {index + 1}
+        </div>
+
         <div className="flex-shrink-0 w-6 h-6 rounded-lg bg-surface-container-high/70 flex items-center justify-center">
           {status.icon}
         </div>
 
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          <span className="font-mono font-semibold text-on-surface truncate">
+          <span className="font-mono font-bold text-on-surface truncate text-sm">
             {tool.name}
           </span>
 
@@ -112,7 +135,7 @@ function ToolCallItem({ tool }: { tool: ToolCall }) {
         </div>
 
         {tool.duration !== undefined && (
-          <span className="inline-flex items-center gap-1 text-[10px] text-on-surface-variant/80 font-mono">
+          <span className="inline-flex items-center gap-1 text-[10px] text-on-surface-variant/80 font-mono font-semibold">
             <Zap className="h-3 w-3" />
             {tool.duration}ms
           </span>
@@ -122,7 +145,7 @@ function ToolCallItem({ tool }: { tool: ToolCall }) {
       </button>
 
       {showDetails && (
-        <div className="px-3 pb-3 space-y-3 border-t border-outline-variant/15">
+        <div className="px-3.5 pb-3 space-y-3 border-t border-outline-variant/15">
           <div className="pt-3">
             <div className="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider mb-1.5">
               Input

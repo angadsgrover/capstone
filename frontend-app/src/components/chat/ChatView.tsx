@@ -239,7 +239,7 @@ export default function ChatView() {
               Clear Skies <span className="text-secondary italic">Await.</span>
             </h1>
             <p className="text-on-surface-variant text-lg max-w-xl mx-auto font-medium mb-8">
-              Real-time aviation weather intelligence powered by HKO, HKYAA, and PolyU collaboration.
+              Real-time aviation weather intelligence - HKO, HKYAA, and PolyU.
             </p>
 
             {/* Quick prompts */}

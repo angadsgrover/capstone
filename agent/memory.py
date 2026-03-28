@@ -55,9 +55,21 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+COMMON_KNOWLEDGE_DATASET = os.getenv("COMMON_KNOWLEDGE_DATASET", "aviation_knowledge")
+SESSION_KNOWLEDGE_PREFIX = os.getenv("SESSION_KNOWLEDGE_PREFIX", "session_knowledge")
+
+
+def _safe_scope_key(raw: str) -> str:
+    """Normalize scope keys (session IDs) into dataset-safe identifiers."""
+    if not raw:
+        return "default"
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "_", raw.strip())
+    return cleaned[:80] or "default"
 
 
 def _build_mem0_config() -> dict:
@@ -254,6 +266,14 @@ class DualMemoryManager:
         # Import cognee_client lazily to avoid circular imports
         self._cognee_manager: Any = None
 
+    def get_common_dataset_name(self) -> str:
+        """Return the configured shared/common knowledge dataset name."""
+        return COMMON_KNOWLEDGE_DATASET
+
+    def get_session_dataset_name(self, session_id: str) -> str:
+        """Return a session-scoped long-term knowledge dataset name."""
+        return f"{SESSION_KNOWLEDGE_PREFIX}_{_safe_scope_key(session_id)}"
+
     async def init(self) -> None:
         """Initialize both memory systems."""
         # Initialize short-term (mem0)
@@ -328,7 +348,7 @@ class DualMemoryManager:
     async def search_long_term(
         self,
         query: str,
-        dataset_name: str = "aviation_knowledge",
+        dataset_name: str = COMMON_KNOWLEDGE_DATASET,
         limit: int = 5,
     ) -> str:
         """
@@ -349,11 +369,33 @@ class DualMemoryManager:
             return ""
         return await self._cognee_manager.search(query, dataset_name, limit)
 
+    async def search_session_long_term(
+        self,
+        query: str,
+        session_id: str,
+        limit: int = 5,
+    ) -> str:
+        """Search session-scoped long-term knowledge."""
+        dataset_name = self.get_session_dataset_name(session_id)
+        return await self.search_long_term(query=query, dataset_name=dataset_name, limit=limit)
+
+    async def search_common_long_term(
+        self,
+        query: str,
+        limit: int = 5,
+    ) -> str:
+        """Search common/shared long-term knowledge."""
+        return await self.search_long_term(
+            query=query,
+            dataset_name=self.get_common_dataset_name(),
+            limit=limit,
+        )
+
     async def add_knowledge(
         self,
         text: str,
         metadata: dict[str, Any] | None = None,
-        dataset_name: str = "aviation_knowledge",
+        dataset_name: str = COMMON_KNOWLEDGE_DATASET,
     ) -> bool:
         """
         Ingest document into long-term knowledge graph.
@@ -372,10 +414,20 @@ class DualMemoryManager:
             return False
         return await self._cognee_manager.add_document(text, metadata, dataset_name)
 
+    async def add_session_knowledge(
+        self,
+        text: str,
+        session_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Ingest knowledge scoped to a single session."""
+        dataset_name = self.get_session_dataset_name(session_id)
+        return await self.add_knowledge(text=text, metadata=metadata, dataset_name=dataset_name)
+
     async def add_knowledge_batch(
         self,
         documents: List[Dict[str, Any]],
-        dataset_name: str = "aviation_knowledge",
+        dataset_name: str = COMMON_KNOWLEDGE_DATASET,
     ) -> int:
         """
         Ingest multiple documents in batch.
@@ -391,15 +443,26 @@ class DualMemoryManager:
             return 0
         return await self._cognee_manager.add_documents_batch(documents, dataset_name)
 
+    async def add_session_knowledge_batch(
+        self,
+        documents: List[Dict[str, Any]],
+        session_id: str,
+    ) -> int:
+        """Ingest a batch of documents scoped to a single session."""
+        dataset_name = self.get_session_dataset_name(session_id)
+        return await self.add_knowledge_batch(documents=documents, dataset_name=dataset_name)
+
     # ── Combined search (best practices) ──────────────────────────────────────
 
     async def search_combined(
         self,
         query: str,
         user_id: str,
+        session_id: str | None = None,
         short_term_limit: int = 3,
-        long_term_limit: int = 3,
-        dataset_name: str = "aviation_knowledge",
+        session_long_term_limit: int = 2,
+        common_long_term_limit: int = 2,
+        dataset_name: str = COMMON_KNOWLEDGE_DATASET,
     ) -> str:
         """
         Search BOTH short-term and long-term memory, formatted for LLM context.
@@ -410,8 +473,9 @@ class DualMemoryManager:
             query: Search query
             user_id: Session/user identifier
             short_term_limit: Max short-term results
-            long_term_limit: Max long-term results
-            dataset_name: Long-term dataset name
+            session_long_term_limit: Max session-scoped long-term results
+            common_long_term_limit: Max shared/common long-term results
+            dataset_name: Common long-term dataset name
 
         Returns:
             Formatted string with both memory types clearly separated
@@ -424,13 +488,29 @@ class DualMemoryManager:
             results.append("## Recent Context (Short-term Memory)")
             results.append(short_term)
 
-        # Long-term knowledge
-        long_term = await self.search_long_term(query, dataset_name, long_term_limit)
-        if long_term:
+        # Session-scoped long-term knowledge
+        if session_id:
+            session_knowledge = await self.search_session_long_term(
+                query=query,
+                session_id=session_id,
+                limit=session_long_term_limit,
+            )
+        else:
+            session_knowledge = ""
+
+        if session_knowledge:
+            if results:
+                results.append("")
+            results.append("## Session Knowledge (Long-term)")
+            results.append(session_knowledge)
+
+        # Common shared long-term knowledge
+        common_knowledge = await self.search_long_term(query, dataset_name, common_long_term_limit)
+        if common_knowledge:
             if results:
                 results.append("")  # blank line separator
-            results.append("## Domain Knowledge (Long-term Memory)")
-            results.append(long_term)
+            results.append("## Common Knowledge (Long-term)")
+            results.append(common_knowledge)
 
         return "\n".join(results) if results else ""
 
@@ -439,7 +519,7 @@ class DualMemoryManager:
     async def get_entity(
         self,
         entity_name: str,
-        dataset_name: str = "aviation_knowledge",
+        dataset_name: str = COMMON_KNOWLEDGE_DATASET,
     ) -> Optional[Dict[str, Any]]:
         """
         Retrieve specific entity and relationships from knowledge graph.
@@ -457,7 +537,7 @@ class DualMemoryManager:
             return None
         return await self._cognee_manager.get_entity(entity_name, dataset_name)
 
-    async def reset_long_term(self, dataset_name: str = "aviation_knowledge") -> bool:
+    async def reset_long_term(self, dataset_name: str = COMMON_KNOWLEDGE_DATASET) -> bool:
         """
         Clear long-term knowledge graph (useful for testing/rebuilding).
 

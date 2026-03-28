@@ -9,12 +9,20 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
+
+try:
+    import jwt
+    from jwt import InvalidTokenError, PyJWKClient
+except Exception:  # pragma: no cover - optional dependency handling
+    jwt = None
+    InvalidTokenError = Exception
+    PyJWKClient = None
 
 from db import Database
 from memory import DualMemoryManager  # Upgraded from MemoryManager
@@ -128,17 +136,87 @@ db             = Database()
 memory_manager = DualMemoryManager()  # Unified short-term (mem0) + long-term (cognee)
 cache          = CacheManager()       # Redis cache for frequently-asked queries
 
+# ── Runtime scaling controls ──────────────────────────────────────────────────
+
+MAX_CONCURRENT_GRAPH_RUNS = int(os.getenv("MAX_CONCURRENT_GRAPH_RUNS", "120"))
+MAX_PENDING_EVENT_STREAMS = int(os.getenv("MAX_PENDING_EVENT_STREAMS", "2000"))
+EVENT_QUEUE_MAXSIZE = int(os.getenv("EVENT_QUEUE_MAXSIZE", "512"))
+RUN_REGISTRY_TTL_SECONDS = int(os.getenv("RUN_REGISTRY_TTL_SECONDS", "900"))
+RUN_REGISTRY_CLEANUP_INTERVAL_SECONDS = int(
+    os.getenv("RUN_REGISTRY_CLEANUP_INTERVAL_SECONDS", "60")
+)
+
+# API rate limits (distributed via Redis when available)
+ENABLE_ENDPOINT_RATE_LIMITING = os.getenv("ENABLE_ENDPOINT_RATE_LIMITING", "true").lower() == "true"
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+RATE_LIMIT_AGENT_PER_WINDOW = int(os.getenv("RATE_LIMIT_AGENT_PER_WINDOW", "30"))
+RATE_LIMIT_STREAM_PER_WINDOW = int(os.getenv("RATE_LIMIT_STREAM_PER_WINDOW", "20"))
+RATE_LIMIT_EXECUTE_PER_WINDOW = int(os.getenv("RATE_LIMIT_EXECUTE_PER_WINDOW", "20"))
+
+# Fall back to client IP when session_id is absent.
+RATE_LIMIT_USE_CLIENT_IP = os.getenv("RATE_LIMIT_USE_CLIENT_IP", "true").lower() == "true"
+
+# CORS hardening
+_cors_origins_raw = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:80,http://localhost:5173")
+CORS_ALLOW_ORIGINS = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
+
+# Auth subject extraction for governance/rate-limiting
+AUTH_SUBJECT_USER_HEADER = os.getenv("AUTH_SUBJECT_USER_HEADER", "x-user-id")
+AUTH_SUBJECT_TENANT_HEADER = os.getenv("AUTH_SUBJECT_TENANT_HEADER", "x-tenant-id")
+REQUIRE_AUTH_SUBJECT = os.getenv("REQUIRE_AUTH_SUBJECT", "false").lower() == "true"
+
+# Optional JWT/OIDC verification for subject extraction.
+AUTH_VERIFICATION_MODE = os.getenv("AUTH_VERIFICATION_MODE", "none").strip().lower()  # none | jwt
+AUTH_ALLOW_HEADER_FALLBACK = os.getenv("AUTH_ALLOW_HEADER_FALLBACK", "true").lower() == "true"
+AUTH_REQUIRE_VERIFIED_SUBJECT = os.getenv("AUTH_REQUIRE_VERIFIED_SUBJECT", "false").lower() == "true"
+JWT_ISSUER = os.getenv("JWT_ISSUER", "").strip()
+JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "").strip()
+JWT_ALGORITHMS = [
+    alg.strip() for alg in os.getenv("JWT_ALGORITHMS", "RS256").split(",") if alg.strip()
+]
+JWT_JWKS_URL = os.getenv("JWT_JWKS_URL", "").strip()
+JWT_PUBLIC_KEY = os.getenv("JWT_PUBLIC_KEY", "")
+JWT_SECRET = os.getenv("JWT_SECRET", "")
+JWT_LEEWAY_SECONDS = int(os.getenv("JWT_LEEWAY_SECONDS", "30"))
+JWT_SUBJECT_CLAIM = os.getenv("JWT_SUBJECT_CLAIM", "sub").strip()
+JWT_USER_ID_CLAIM = os.getenv("JWT_USER_ID_CLAIM", "sub").strip()
+JWT_TENANT_ID_CLAIM = os.getenv("JWT_TENANT_ID_CLAIM", "tenant_id").strip()
+
+# Request/input guarding
+MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", str(1024 * 1024)))
+MAX_INPUT_CHARS = int(os.getenv("MAX_INPUT_CHARS", "12000"))
+MAX_SESSION_ID_CHARS = int(os.getenv("MAX_SESSION_ID_CHARS", "128"))
+
+# Distributed event + queue execution backends
+EVENT_BACKEND = os.getenv("EVENT_BACKEND", "redis").lower()  # redis | memory
+REDIS_EVENT_STREAM_MAXLEN = int(os.getenv("REDIS_EVENT_STREAM_MAXLEN", "2000"))
+REDIS_EVENT_BLOCK_MS = int(os.getenv("REDIS_EVENT_BLOCK_MS", "60000"))
+
+EXECUTION_MODE = os.getenv("EXECUTION_MODE", "direct").lower()  # direct | queued
+WORKFLOW_QUEUE_KEY = os.getenv("WORKFLOW_QUEUE_KEY", "agent:workflow:queue")
+ENABLE_WORKFLOW_WORKER = os.getenv("ENABLE_WORKFLOW_WORKER", "false").lower() == "true"
+WORKFLOW_WORKER_POLL_SECONDS = float(os.getenv("WORKFLOW_WORKER_POLL_SECONDS", "1"))
+
+graph_run_semaphore = asyncio.Semaphore(MAX_CONCURRENT_GRAPH_RUNS)
+
 # ── Lifespan ───────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global global_graph, global_mcp_client
+    global global_graph, global_mcp_client, housekeeper_task, workflow_worker_task
 
     # Startup
     _init_langfuse()  # Initialize Langfuse early (before graph init)
     await db.connect()
     await memory_manager.init()
     await cache.init()  # Initialize Redis cache
+
+    housekeeper_stop_event.clear()
+    housekeeper_task = asyncio.create_task(_housekeep_runs_loop())
+    workflow_worker_stop_event.clear()
+    if ENABLE_WORKFLOW_WORKER:
+        workflow_worker_task = asyncio.create_task(_workflow_worker_loop())
 
     scheduler = None
     if db.available:
@@ -170,6 +248,26 @@ async def lifespan(app: FastAPI):
     if global_mcp_client:
         print("Shutting down MCP client…")
         await global_mcp_client.cleanup()
+
+    housekeeper_stop_event.set()
+    if housekeeper_task:
+        try:
+            await housekeeper_task
+        except Exception:
+            pass
+
+    workflow_worker_stop_event.set()
+    if workflow_worker_task:
+        try:
+            await workflow_worker_task
+        except Exception:
+            pass
+
+    async with event_queues_lock:
+        # Hard cleanup on shutdown to avoid stale in-memory state between restarts.
+        for run_id in list(run_started_at.keys()):
+            await _cleanup_run_locked(run_id)
+
     await db.close()
     await cache.close()  # Close Redis connection
     _shutdown_langfuse()  # Flush and shutdown Langfuse
@@ -178,11 +276,97 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_credentials=CORS_ALLOW_CREDENTIALS,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Requested-With",
+        "X-User-Id",
+        "X-Tenant-Id",
+    ],
 )
+
+
+@app.middleware("http")
+async def request_size_guard(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_REQUEST_BYTES:
+                return JSONResponse(
+                    {
+                        "error": "Request entity too large",
+                        "max_request_bytes": MAX_REQUEST_BYTES,
+                    },
+                    status_code=413,
+                )
+        except ValueError:
+            pass
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def auth_context_middleware(request: Request, call_next):
+    request.state.auth_context = {
+        "user_id": "",
+        "tenant_id": "",
+        "subject": "",
+        "verified": False,
+        "source": "none",
+    }
+
+    if AUTH_VERIFICATION_MODE == "jwt":
+        token = _extract_bearer_token(request)
+        if token:
+            claims, err = await _verify_jwt_token(token)
+            if claims is not None:
+                user_id = str(claims.get(JWT_USER_ID_CLAIM, "") or "").strip()
+                tenant_id = str(claims.get(JWT_TENANT_ID_CLAIM, "") or "").strip()
+                token_sub = str(claims.get(JWT_SUBJECT_CLAIM, "") or "").strip()
+
+                subject = ""
+                if user_id and tenant_id:
+                    subject = f"tenant:{tenant_id}:user:{user_id}"
+                elif user_id:
+                    subject = f"user:{user_id}"
+                elif tenant_id:
+                    subject = f"tenant:{tenant_id}"
+                elif token_sub:
+                    subject = f"jwt:{token_sub}"
+
+                request.state.auth_context = {
+                    "user_id": user_id,
+                    "tenant_id": tenant_id,
+                    "subject": subject,
+                    "verified": bool(subject),
+                    "source": "jwt",
+                }
+            elif AUTH_REQUIRE_VERIFIED_SUBJECT or not AUTH_ALLOW_HEADER_FALLBACK:
+                return JSONResponse(
+                    {
+                        "error": "Unauthorized",
+                        "details": "Bearer token verification failed",
+                        "reason": err or "invalid_token",
+                    },
+                    status_code=401,
+                )
+            else:
+                logger.warning(
+                    "JWT verification failed, continuing with fallback subject extraction: %s",
+                    err,
+                )
+        elif AUTH_REQUIRE_VERIFIED_SUBJECT:
+            return JSONResponse(
+                {
+                    "error": "Unauthorized",
+                    "details": "Bearer token is required",
+                },
+                status_code=401,
+            )
+
+    return await call_next(request)
 
 
 @app.get("/health")
@@ -194,11 +378,52 @@ async def health() -> Dict[str, Any]:
         "version": "1.0.0",
     }
 
+
+@app.get("/ready")
+async def ready() -> JSONResponse:
+    """Readiness probe for deployment orchestration (k8s/compose/reverse-proxy)."""
+    queue_backend_ok = cache.available if EXECUTION_MODE == "queued" else True
+    event_backend_ok = cache.available if EVENT_BACKEND == "redis" else True
+
+    checks = {
+        "graph": global_graph is not None,
+        "db": db.available,
+        "cache": cache.available,
+        "short_term_memory": memory_manager.short_term_available,
+        "long_term_memory": memory_manager.long_term_available,
+        "queue_backend": queue_backend_ok,
+        "event_backend": event_backend_ok,
+    }
+    critical_ok = checks["graph"] and checks["db"] and checks["queue_backend"] and checks["event_backend"]
+    status = "ready" if critical_ok else "not_ready"
+    code = 200 if critical_ok else 503
+    return JSONResponse(
+        {
+            "status": status,
+            "checks": checks,
+            "timestamp": _now_iso(),
+        },
+        status_code=code,
+    )
+
 # ── Globals ────────────────────────────────────────────────────────────────────
 
 global_graph = None
 global_mcp_client = None
 event_queues: Dict[str, asyncio.Queue] = {}
+session_latest_run: Dict[str, str] = {}
+run_session_index: Dict[str, str] = {}
+run_started_at: Dict[str, float] = {}
+run_completed_at: Dict[str, float] = {}
+run_dropped_events: Dict[str, int] = {}
+active_graph_runs = 0
+max_active_graph_runs_seen = 0
+event_queues_lock = asyncio.Lock()
+housekeeper_stop_event = asyncio.Event()
+housekeeper_task: Optional[asyncio.Task] = None
+workflow_worker_stop_event = asyncio.Event()
+workflow_worker_task: Optional[asyncio.Task] = None
+_jwt_jwks_client = None
 
 SPECIALIST_NODES = {"aviation_weather", "hk_weather", "aircraft", "general", "planning"}
 
@@ -219,6 +444,375 @@ PLANNING_INTERNAL_NODES = {"plan", "execute", "synthesize"}
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _runtime_stats() -> Dict[str, Any]:
+    active_streams = len(run_started_at) if _redis_events_enabled() else len(event_queues)
+    return {
+        "active_graph_runs": active_graph_runs,
+        "max_active_graph_runs_seen": max_active_graph_runs_seen,
+        "active_event_streams": active_streams,
+        "tracked_sessions": len(session_latest_run),
+        "run_registry_size": len(run_started_at),
+        "dropped_events_total": sum(run_dropped_events.values()),
+        "limits": {
+            "max_concurrent_graph_runs": MAX_CONCURRENT_GRAPH_RUNS,
+            "max_pending_event_streams": MAX_PENDING_EVENT_STREAMS,
+            "event_queue_maxsize": EVENT_QUEUE_MAXSIZE,
+            "run_registry_ttl_seconds": RUN_REGISTRY_TTL_SECONDS,
+            "rate_limit_window_seconds": RATE_LIMIT_WINDOW_SECONDS,
+            "rate_limit_agent_per_window": RATE_LIMIT_AGENT_PER_WINDOW,
+            "rate_limit_stream_per_window": RATE_LIMIT_STREAM_PER_WINDOW,
+            "rate_limit_execute_per_window": RATE_LIMIT_EXECUTE_PER_WINDOW,
+            "max_request_bytes": MAX_REQUEST_BYTES,
+            "max_input_chars": MAX_INPUT_CHARS,
+            "max_session_id_chars": MAX_SESSION_ID_CHARS,
+            "event_backend": EVENT_BACKEND,
+            "execution_mode": EXECUTION_MODE,
+        },
+    }
+
+
+def _redis_events_enabled() -> bool:
+    return EVENT_BACKEND == "redis" and cache.available and getattr(cache, "_redis", None) is not None
+
+
+def _run_meta_key(run_id: str) -> str:
+    return f"runmeta:{run_id}"
+
+
+def _session_latest_key(session_id: str) -> str:
+    return f"session_latest:{session_id}"
+
+
+def _run_events_stream_key(run_id: str) -> str:
+    return f"run_events:{run_id}"
+
+
+def _safe_session_id(session_id: str) -> str:
+    raw = (session_id or "").strip()
+    if not raw:
+        return f"sess-{uuid.uuid4().hex}"
+    return raw[:MAX_SESSION_ID_CHARS]
+
+
+def _validate_user_input_text(value: str) -> Optional[JSONResponse]:
+    if not value:
+        return JSONResponse({"error": "No input provided"}, status_code=400)
+    if len(value) > MAX_INPUT_CHARS:
+        return JSONResponse(
+            {
+                "error": "Input too long",
+                "max_input_chars": MAX_INPUT_CHARS,
+                "actual_input_chars": len(value),
+            },
+            status_code=400,
+        )
+    return None
+
+
+def _resolve_auth_subject(request: Request) -> Dict[str, str]:
+    state_ctx = getattr(request.state, "auth_context", None)
+    if isinstance(state_ctx, dict) and state_ctx.get("subject"):
+        return {
+            "user_id": str(state_ctx.get("user_id", "")),
+            "tenant_id": str(state_ctx.get("tenant_id", "")),
+            "subject": str(state_ctx.get("subject", "")),
+        }
+
+    if AUTH_VERIFICATION_MODE == "jwt" and not AUTH_ALLOW_HEADER_FALLBACK:
+        return {"user_id": "", "tenant_id": "", "subject": ""}
+
+    user_id = request.headers.get(AUTH_SUBJECT_USER_HEADER, "").strip()
+    tenant_id = request.headers.get(AUTH_SUBJECT_TENANT_HEADER, "").strip()
+    if user_id and tenant_id:
+        return {"user_id": user_id, "tenant_id": tenant_id, "subject": f"tenant:{tenant_id}:user:{user_id}"}
+    if user_id:
+        return {"user_id": user_id, "tenant_id": "", "subject": f"user:{user_id}"}
+    if tenant_id:
+        return {"user_id": "", "tenant_id": tenant_id, "subject": f"tenant:{tenant_id}"}
+    return {"user_id": "", "tenant_id": "", "subject": ""}
+
+
+async def _set_run_metadata(run_id: str, session_id: str) -> None:
+    if not _redis_events_enabled():
+        return
+    payload = {
+        "run_id": run_id,
+        "session_id": session_id,
+        "started_at": _now_iso(),
+        "completed": False,
+    }
+    await cache._redis.setex(_run_meta_key(run_id), RUN_REGISTRY_TTL_SECONDS, json.dumps(payload))
+
+
+async def _mark_run_completed(run_id: str) -> None:
+    if not _redis_events_enabled():
+        return
+    raw = await cache._redis.get(_run_meta_key(run_id))
+    payload: Dict[str, Any] = {}
+    if raw:
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = {}
+    payload.update({"completed": True, "completed_at": _now_iso()})
+    await cache._redis.setex(_run_meta_key(run_id), RUN_REGISTRY_TTL_SECONDS, json.dumps(payload))
+
+
+async def _set_session_latest(session_id: str, run_id: str) -> None:
+    if not _redis_events_enabled():
+        return
+    await cache._redis.setex(_session_latest_key(session_id), RUN_REGISTRY_TTL_SECONDS, run_id)
+
+
+async def _get_session_latest(session_id: str) -> str:
+    if not _redis_events_enabled():
+        return ""
+    raw = await cache._redis.get(_session_latest_key(session_id))
+    return str(raw or "")
+
+
+async def _append_redis_event(run_id: str, data: Dict[str, Any]) -> None:
+    if not _redis_events_enabled():
+        return
+    stream_key = _run_events_stream_key(run_id)
+    payload = json.dumps(data)
+    await cache._redis.xadd(
+        stream_key,
+        {"payload": payload},
+        maxlen=REDIS_EVENT_STREAM_MAXLEN,
+        approximate=True,
+    )
+    await cache._redis.expire(stream_key, RUN_REGISTRY_TTL_SECONDS)
+
+
+def _extract_bearer_token(request: Request) -> str:
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header:
+        return ""
+    parts = auth_header.strip().split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return ""
+    return parts[1].strip()
+
+
+def _get_jwks_client() -> Any:
+    global _jwt_jwks_client
+    if _jwt_jwks_client is None:
+        if not JWT_JWKS_URL:
+            raise RuntimeError("JWT_JWKS_URL is not configured")
+        if PyJWKClient is None:
+            raise RuntimeError("PyJWT with JWK support is unavailable")
+        _jwt_jwks_client = PyJWKClient(JWT_JWKS_URL)
+    return _jwt_jwks_client
+
+
+def _decode_jwt_token_sync(token: str) -> Dict[str, Any]:
+    if jwt is None:
+        raise RuntimeError("PyJWT is not installed")
+
+    key: Any
+    if JWT_JWKS_URL:
+        key = _get_jwks_client().get_signing_key_from_jwt(token).key
+    elif JWT_PUBLIC_KEY:
+        key = JWT_PUBLIC_KEY
+    elif JWT_SECRET:
+        key = JWT_SECRET
+    else:
+        raise RuntimeError("No JWT key material configured (set JWT_JWKS_URL, JWT_PUBLIC_KEY, or JWT_SECRET)")
+
+    decode_kwargs: Dict[str, Any] = {
+        "algorithms": JWT_ALGORITHMS or ["RS256"],
+        "leeway": JWT_LEEWAY_SECONDS,
+    }
+    if JWT_ISSUER:
+        decode_kwargs["issuer"] = JWT_ISSUER
+    if JWT_AUDIENCE:
+        decode_kwargs["audience"] = JWT_AUDIENCE
+    else:
+        decode_kwargs["options"] = {"verify_aud": False}
+
+    return jwt.decode(token, key=key, **decode_kwargs)
+
+
+async def _verify_jwt_token(token: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    if AUTH_VERIFICATION_MODE != "jwt":
+        return None, "jwt_verification_disabled"
+    try:
+        claims = await asyncio.to_thread(_decode_jwt_token_sync, token)
+        return claims, ""
+    except InvalidTokenError as e:
+        return None, str(e)
+    except Exception as e:
+        logger.warning("JWT verification error: %s", e)
+        return None, str(e)
+
+
+def _client_identity(request: Request, session_id: str = "") -> str:
+    auth = _resolve_auth_subject(request)
+    if auth.get("subject"):
+        return auth["subject"]
+
+    if session_id:
+        return f"session:{session_id}"
+
+    if RATE_LIMIT_USE_CLIENT_IP:
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            ip = xff.split(",")[0].strip()
+            if ip:
+                return f"ip:{ip}"
+        if request.client and request.client.host:
+            return f"ip:{request.client.host}"
+
+    return "anon"
+
+
+async def _enforce_rate_limit(
+    request: Request,
+    bucket: str,
+    limit: int,
+    session_id: str = "",
+) -> Optional[JSONResponse]:
+    auth = _resolve_auth_subject(request)
+    if (REQUIRE_AUTH_SUBJECT or AUTH_REQUIRE_VERIFIED_SUBJECT) and not auth.get("subject"):
+        return JSONResponse(
+            {
+                "error": "Unauthorized",
+                "details": "Authenticated subject is required",
+                "auth_mode": AUTH_VERIFICATION_MODE,
+                "required_headers": [AUTH_SUBJECT_USER_HEADER, AUTH_SUBJECT_TENANT_HEADER],
+            },
+            status_code=401,
+        )
+
+    if not ENABLE_ENDPOINT_RATE_LIMITING:
+        return None
+
+    identity = _client_identity(request, session_id=session_id)
+    decision = await cache.check_rate_limit(
+        bucket=bucket,
+        subject=identity,
+        limit=limit,
+        window_seconds=RATE_LIMIT_WINDOW_SECONDS,
+    )
+
+    if decision.get("allowed", True):
+        return None
+
+    retry_after = int(decision.get("retry_after", RATE_LIMIT_WINDOW_SECONDS))
+    payload = {
+        "error": "Too Many Requests",
+        "bucket": bucket,
+        "limit": decision.get("limit", limit),
+        "window_seconds": decision.get("window_seconds", RATE_LIMIT_WINDOW_SECONDS),
+        "retry_after": retry_after,
+        "remaining": decision.get("remaining", 0),
+    }
+    return JSONResponse(payload, status_code=429, headers={"Retry-After": str(retry_after)})
+
+
+async def _cleanup_run_locked(run_id: str) -> None:
+    event_queues.pop(run_id, None)
+    run_started_at.pop(run_id, None)
+    run_completed_at.pop(run_id, None)
+    run_dropped_events.pop(run_id, None)
+    resolved_session = run_session_index.pop(run_id, None)
+    if resolved_session and session_latest_run.get(resolved_session) == run_id:
+        session_latest_run.pop(resolved_session, None)
+
+    if _redis_events_enabled():
+        try:
+            await cache._redis.delete(_run_meta_key(run_id))
+            await cache._redis.delete(_run_events_stream_key(run_id))
+            if resolved_session:
+                latest = await cache._redis.get(_session_latest_key(resolved_session))
+                if latest == run_id:
+                    await cache._redis.delete(_session_latest_key(resolved_session))
+        except Exception as e:
+            logger.debug("Run cleanup redis error for %s: %s", run_id, e)
+
+
+async def _cleanup_stale_runs(now_ts: Optional[float] = None) -> int:
+    now = now_ts if now_ts is not None else time.time()
+    stale: list[str] = []
+
+    async with event_queues_lock:
+        for run_id, started in run_started_at.items():
+            completed = run_completed_at.get(run_id)
+            ref = completed if completed is not None else started
+            if now - ref > RUN_REGISTRY_TTL_SECONDS:
+                stale.append(run_id)
+
+        for run_id in stale:
+            await _cleanup_run_locked(run_id)
+
+    return len(stale)
+
+
+async def _housekeep_runs_loop() -> None:
+    while not housekeeper_stop_event.is_set():
+        try:
+            await asyncio.wait_for(
+                housekeeper_stop_event.wait(),
+                timeout=RUN_REGISTRY_CLEANUP_INTERVAL_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            removed = await _cleanup_stale_runs()
+            if removed:
+                logger.info("Housekeeper removed %d stale run(s)", removed)
+
+
+async def _enqueue_workflow_job(run_id: str, session_id: str, user_input: str) -> bool:
+    if not cache.available or getattr(cache, "_redis", None) is None:
+        return False
+    job = {
+        "run_id": run_id,
+        "session_id": session_id,
+        "user_input": user_input,
+        "enqueued_at": _now_iso(),
+    }
+    try:
+        await cache._redis.lpush(WORKFLOW_QUEUE_KEY, json.dumps(job))
+        return True
+    except Exception as e:
+        logger.warning("Failed to enqueue workflow job %s: %s", run_id, e)
+        return False
+
+
+async def _workflow_worker_loop() -> None:
+    if not cache.available or getattr(cache, "_redis", None) is None:
+        logger.warning("Workflow worker requested but Redis cache is unavailable")
+        return
+
+    logger.info("Workflow worker started (queue=%s)", WORKFLOW_QUEUE_KEY)
+    while not workflow_worker_stop_event.is_set():
+        try:
+            item = await cache._redis.brpop(WORKFLOW_QUEUE_KEY, timeout=5)
+            if not item:
+                await asyncio.sleep(WORKFLOW_WORKER_POLL_SECONDS)
+                continue
+
+            _, raw_payload = item
+            try:
+                job = json.loads(raw_payload)
+            except Exception:
+                logger.warning("Skipping invalid workflow queue payload")
+                continue
+
+            run_id = str(job.get("run_id", "")).strip()
+            session_id = _safe_session_id(str(job.get("session_id", "")).strip())
+            user_input = str(job.get("user_input", ""))
+
+            if not run_id or not user_input:
+                logger.warning("Skipping workflow job with missing run_id/user_input")
+                continue
+
+            await _run_with_events(user_input, session_id, event_key=run_id)
+        except Exception as e:
+            logger.exception("Workflow worker loop error: %s", e)
+            await asyncio.sleep(WORKFLOW_WORKER_POLL_SECONDS)
 
 
 def _extract_planning_data(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -287,9 +881,26 @@ def _build_config(session_id: str, trace_name: str = "", user_id: str = "") -> d
 # ── Workflow-event SSE helpers ─────────────────────────────────────────────────
 
 async def _push(session_id: str, data: Dict[str, Any]) -> None:
+    if _redis_events_enabled():
+        try:
+            await _append_redis_event(session_id, data)
+            return
+        except Exception as e:
+            logger.debug("Redis event push failed for %s: %s", session_id, e)
+
     q = event_queues.get(session_id)
     if q:
-        await q.put(json.dumps(data))
+        payload = json.dumps(data)
+        try:
+            q.put_nowait(payload)
+        except asyncio.QueueFull:
+            # Backpressure strategy for scale: drop oldest event to keep freshest state.
+            try:
+                _ = q.get_nowait()
+                q.put_nowait(payload)
+                run_dropped_events[session_id] = run_dropped_events.get(session_id, 0) + 1
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                run_dropped_events[session_id] = run_dropped_events.get(session_id, 0) + 1
 
 
 def _fmt_input(raw: Any) -> str:
@@ -311,8 +922,13 @@ def _tool_call_names(tool_calls: list) -> str:
     return ", ".join(names)
 
 
-async def _run_with_events(user_input: str, session_id: str) -> None:
+async def _run_with_events(user_input: str, session_id: str, event_key: Optional[str] = None) -> None:
     """Run graph and push rich SSE workflow events into the session queue."""
+    global active_graph_runs, max_active_graph_runs_seen
+
+    graph_session_id = session_id
+    session_id = event_key or session_id
+
     if not global_graph:
         await _push(session_id, {
             "nodeId": "error", "event_type": "error",
@@ -322,7 +938,7 @@ async def _run_with_events(user_input: str, session_id: str) -> None:
         await _push(session_id, {"__done__": True})
         return
 
-    config = _build_config(session_id, trace_name=user_input[:80])
+    config = _build_config(graph_session_id, trace_name=user_input[:80])
     active_nodes: set[str] = set()
     node_start: dict[str, float] = {}
     tool_start: dict[str, float] = {}
@@ -336,8 +952,13 @@ async def _run_with_events(user_input: str, session_id: str) -> None:
     INTERNAL = {"agent", "tools", *PLANNING_INTERNAL_NODES}
     INTERNAL_LABELS = {"agent": "LLM Call", "tools": "Tool Execution"}
 
+    await graph_run_semaphore.acquire()
+    active_graph_runs += 1
+    if active_graph_runs > max_active_graph_runs_seen:
+        max_active_graph_runs_seen = active_graph_runs
+
     try:
-        request_id = f"{session_id}:{uuid.uuid4().hex}"
+        request_id = f"{graph_session_id}:{uuid.uuid4().hex}"
         mcp_module.set_request_context(request_id)
         async for ev in global_graph.astream_events(
             {"messages": [HumanMessage(content=user_input)]},
@@ -555,12 +1176,18 @@ async def _run_with_events(user_input: str, session_id: str) -> None:
                 })
 
     except Exception as e:
-        logger.exception("Orchestration error for session %s", session_id)
+        logger.exception("Orchestration error for session %s", graph_session_id)
         await _push(session_id, {
             "nodeId": "error", "event_type": "error", "status": "failed",
             "details": f"Error: {e}", "timestamp": _now_iso(), "raw": {"error": str(e)},
         })
     finally:
+        if active_graph_runs > 0:
+            active_graph_runs -= 1
+        graph_run_semaphore.release()
+        async with event_queues_lock:
+            run_completed_at[session_id] = time.time()
+        await _mark_run_completed(session_id)
         mcp_module.clear_request_context()
         await _push(session_id, {"__done__": True})
 
@@ -570,27 +1197,165 @@ async def _run_with_events(user_input: str, session_id: str) -> None:
 @app.post("/api/agent/execute")
 async def execute_workflow(request: Request):
     data       = await request.json()
-    user_input = data.get("input", "")
-    session_id = data.get("session_id", "default")
+    user_input = str(data.get("input", ""))
+    invalid_input = _validate_user_input_text(user_input)
+    if invalid_input:
+        return invalid_input
+
+    session_id = _safe_session_id(str(data.get("session_id") or f"sess-{uuid.uuid4().hex}"))
+    run_id = str(data.get("run_id") or f"{session_id}:{uuid.uuid4().hex}")[:256]
+
+    rate_limited = await _enforce_rate_limit(
+        request,
+        bucket="agent_execute",
+        limit=RATE_LIMIT_EXECUTE_PER_WINDOW,
+        session_id=session_id,
+    )
+    if rate_limited:
+        return rate_limited
 
     if not global_graph:
         return JSONResponse({"error": "Agent not initialised"}, status_code=500)
-    event_queues[session_id] = asyncio.Queue()
-    asyncio.create_task(_run_with_events(user_input, session_id))
-    return JSONResponse({"status": "started", "session_id": session_id})
+
+    async with event_queues_lock:
+        # Opportunistic cleanup before admission checks.
+        now = time.time()
+        stale = [
+            rid for rid, started in run_started_at.items()
+            if now - (run_completed_at.get(rid, started)) > RUN_REGISTRY_TTL_SECONDS
+        ]
+        for rid in stale:
+            await _cleanup_run_locked(rid)
+
+        current_streams = len(event_queues) if not _redis_events_enabled() else len(run_started_at)
+        if current_streams >= MAX_PENDING_EVENT_STREAMS:
+            return JSONResponse(
+                {
+                    "error": "Server busy",
+                    "details": "Too many pending workflow streams",
+                    "active_event_streams": current_streams,
+                    "max_pending_event_streams": MAX_PENDING_EVENT_STREAMS,
+                },
+                status_code=503,
+            )
+
+        if not _redis_events_enabled():
+            event_queues[run_id] = asyncio.Queue(maxsize=EVENT_QUEUE_MAXSIZE)
+        session_latest_run[session_id] = run_id
+        run_session_index[run_id] = session_id
+        run_started_at[run_id] = now
+        run_dropped_events[run_id] = 0
+
+    await _set_run_metadata(run_id, session_id)
+    await _set_session_latest(session_id, run_id)
+
+    if EXECUTION_MODE == "queued":
+        queued = await _enqueue_workflow_job(run_id, session_id, user_input)
+        if not queued:
+            return JSONResponse(
+                {
+                    "error": "Queue unavailable",
+                    "details": "Queued execution mode requires Redis availability",
+                },
+                status_code=503,
+            )
+        return JSONResponse(
+            {
+                "status": "queued",
+                "mode": "queued",
+                "session_id": session_id,
+                "run_id": run_id,
+            }
+        )
+
+    asyncio.create_task(_run_with_events(user_input, session_id, event_key=run_id))
+    return JSONResponse({
+        "status": "started",
+        "mode": "direct",
+        "session_id": session_id,
+        "run_id": run_id,
+        "queue_maxsize": EVENT_QUEUE_MAXSIZE,
+    })
 
 
 # ── GET /api/agent/events ──────────────────────────────────────────────────────
 
 @app.get("/api/agent/events")
-async def stream_events(session_id: str = "default"):
+async def stream_events(request: Request, session_id: str = "default", run_id: str = ""):
+    rate_limited = await _enforce_rate_limit(
+        request,
+        bucket="agent_events",
+        limit=RATE_LIMIT_STREAM_PER_WINDOW,
+        session_id=session_id,
+    )
+    if rate_limited:
+        return rate_limited
+
     async def event_stream():
+        effective_run_id = run_id.strip()
+        safe_session_id = _safe_session_id(session_id)
+        saw_done = False
+
+        if not effective_run_id:
+            waited, interval, deadline = 0.0, 0.05, 10.0
+            while waited < deadline:
+                if _redis_events_enabled():
+                    effective_run_id = await _get_session_latest(safe_session_id)
+                else:
+                    effective_run_id = session_latest_run.get(safe_session_id, "")
+                if effective_run_id:
+                    break
+                await asyncio.sleep(interval)
+                waited += interval
+
+        if not effective_run_id:
+            yield "event: end\ndata: {}\n\n"
+            return
+
+        if _redis_events_enabled():
+            stream_key = _run_events_stream_key(effective_run_id)
+            last_id = "0-0"
+            try:
+                while True:
+                    try:
+                        rows = await cache._redis.xread(
+                            {stream_key: last_id},
+                            count=100,
+                            block=REDIS_EVENT_BLOCK_MS,
+                        )
+                    except Exception:
+                        rows = []
+
+                    if not rows:
+                        yield ": keepalive\n\n"
+                        continue
+
+                    for _, events in rows:
+                        for event_id, fields in events:
+                            last_id = event_id
+                            raw = fields.get("payload")
+                            if not raw:
+                                continue
+                            try:
+                                if json.loads(raw).get("__done__"):
+                                    saw_done = True
+                                    yield "event: end\ndata: {}\n\n"
+                                    return
+                            except Exception:
+                                pass
+                            yield f"data: {raw}\n\n"
+            finally:
+                if saw_done:
+                    async with event_queues_lock:
+                        await _cleanup_run_locked(effective_run_id)
+            return
+
         waited, interval, deadline = 0.0, 0.05, 10.0
-        while session_id not in event_queues and waited < deadline:
+        while effective_run_id not in event_queues and waited < deadline:
             await asyncio.sleep(interval)
             waited += interval
 
-        q: Optional[asyncio.Queue] = event_queues.get(session_id)
+        q: Optional[asyncio.Queue] = event_queues.get(effective_run_id)
         if q is None:
             yield "event: end\ndata: {}\n\n"
             return
@@ -604,13 +1369,16 @@ async def stream_events(session_id: str = "default"):
                     continue
                 try:
                     if json.loads(raw).get("__done__"):
+                        saw_done = True
                         yield "event: end\ndata: {}\n\n"
                         break
                 except (json.JSONDecodeError, AttributeError):
                     pass
                 yield f"data: {raw}\n\n"
         finally:
-            event_queues.pop(session_id, None)
+            if saw_done:
+                async with event_queues_lock:
+                    await _cleanup_run_locked(effective_run_id)
 
     return StreamingResponse(
         event_stream(),
@@ -622,21 +1390,44 @@ async def stream_events(session_id: str = "default"):
 # ── GET /api/agent/stream ──────────────────────────────────────────────────────
 
 @app.get("/api/agent/stream")
-async def stream_chat(input: str = "", session_id: str = "default"):
-    if not input:
-        return JSONResponse({"error": "No input provided"}, status_code=400)
+async def stream_chat(request: Request, input: str = "", session_id: str = ""):
+    invalid_input = _validate_user_input_text(str(input))
+    if invalid_input:
+        return invalid_input
     if not global_graph:
         return JSONResponse({"error": "Agent not initialised"}, status_code=500)
 
-    config = _build_config(session_id, trace_name=input[:80])
+    effective_session_id = _safe_session_id(session_id or f"sess-{uuid.uuid4().hex}")
+    auth = _resolve_auth_subject(request)
+    rate_limited = await _enforce_rate_limit(
+        request,
+        bucket="agent_stream",
+        limit=RATE_LIMIT_STREAM_PER_WINDOW,
+        session_id=effective_session_id,
+    )
+    if rate_limited:
+        return rate_limited
+
+    config = _build_config(
+        effective_session_id,
+        trace_name=str(input)[:80],
+        user_id=auth.get("user_id", ""),
+    )
 
     async def stream_tokens():
+        global active_graph_runs, max_active_graph_runs_seen
+
         current_specialist = ""
         tool_start_times: Dict[str, float] = {}
         step_counts: Dict[str, int] = {}
         streamed_chunk_counts: Dict[str, int] = {}
         router_start = 0.0
-        request_id = f"{session_id}:{uuid.uuid4().hex}"
+        request_id = f"{effective_session_id}:{uuid.uuid4().hex}"
+
+        await graph_run_semaphore.acquire()
+        active_graph_runs += 1
+        if active_graph_runs > max_active_graph_runs_seen:
+            max_active_graph_runs_seen = active_graph_runs
 
         try:
             mcp_module.set_request_context(request_id)
@@ -751,10 +1542,13 @@ async def stream_chat(input: str = "", session_id: str = "default"):
 
             yield "event: end\ndata: {}\n\n"
         except Exception as e:
-            logger.exception("Streaming error for session %s", session_id)
+            logger.exception("Streaming error for session %s", effective_session_id)
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
             yield "event: end\ndata: {}\n\n"
         finally:
+            if active_graph_runs > 0:
+                active_graph_runs -= 1
+            graph_run_semaphore.release()
             mcp_module.clear_request_context()
 
     return StreamingResponse(
@@ -768,9 +1562,25 @@ async def stream_chat(input: str = "", session_id: str = "default"):
 
 @app.post("/api/agent")
 async def chat_endpoint(request: Request):
+    global active_graph_runs, max_active_graph_runs_seen
+
     data       = await request.json()
-    user_input = data.get("input", data.get("message", ""))
-    session_id = data.get("session_id", "default")
+    user_input = str(data.get("input", data.get("message", "")))
+    invalid_input = _validate_user_input_text(user_input)
+    if invalid_input:
+        return invalid_input
+
+    session_id = _safe_session_id(str(data.get("session_id") or f"sess-{uuid.uuid4().hex}"))
+    auth = _resolve_auth_subject(request)
+
+    rate_limited = await _enforce_rate_limit(
+        request,
+        bucket="agent_chat",
+        limit=RATE_LIMIT_AGENT_PER_WINDOW,
+        session_id=session_id,
+    )
+    if rate_limited:
+        return rate_limited
 
     if not global_graph:
         return JSONResponse({"error": "Agent not initialised"}, status_code=500)
@@ -783,8 +1593,18 @@ async def chat_endpoint(request: Request):
         logger.info("Cache HIT for query: %s", user_input[:80])
         return JSONResponse({"response": cached_response, "cached": True})
 
-    config = _build_config(session_id, trace_name=user_input[:80])
+    config = _build_config(
+        session_id,
+        trace_name=user_input[:80],
+        user_id=auth.get("user_id", ""),
+    )
     request_id = f"{session_id}:{uuid.uuid4().hex}"
+
+    await graph_run_semaphore.acquire()
+    active_graph_runs += 1
+    if active_graph_runs > max_active_graph_runs_seen:
+        max_active_graph_runs_seen = active_graph_runs
+
     try:
         mcp_module.set_request_context(request_id)
         result = await global_graph.ainvoke(
@@ -823,6 +1643,7 @@ async def chat_endpoint(request: Request):
         return JSONResponse({
             "response": response_text,
             "cached": False,
+            "session_id": session_id,
             "route": detected_route,
             "plan": planning_data.get("plan", []) if planning_data else [],
             "execution_trace": planning_data.get("execution_trace", []) if planning_data else [],
@@ -832,6 +1653,9 @@ async def chat_endpoint(request: Request):
         logger.exception("Chat endpoint error for session %s", session_id)
         return JSONResponse({"response": f"Error: {e}"}, status_code=500)
     finally:
+        if active_graph_runs > 0:
+            active_graph_runs -= 1
+        graph_run_semaphore.release()
         mcp_module.clear_request_context()
 
 
@@ -863,7 +1687,9 @@ async def ingest_document(request: Request):
         data = await request.json()
         text = data.get("text", "")
         metadata = data.get("metadata", {})
-        dataset = data.get("dataset", "aviation_knowledge")
+        dataset = data.get("dataset", "")
+        scope = str(data.get("scope", "common")).lower()
+        scope_session_id = data.get("session_id", "")
 
         if not text:
             return JSONResponse(
@@ -871,15 +1697,46 @@ async def ingest_document(request: Request):
                 status_code=400,
             )
 
-        success = await memory_manager.add_knowledge(
-            text=text,
-            metadata=metadata,
-            dataset_name=dataset,
-        )
+        if scope == "session":
+            if not scope_session_id:
+                return JSONResponse(
+                    {"success": False, "error": "session_id required when scope=session"},
+                    status_code=400,
+                )
+            if dataset:
+                success = await memory_manager.add_knowledge(
+                    text=text,
+                    metadata=metadata,
+                    dataset_name=dataset,
+                )
+            else:
+                success = await memory_manager.add_session_knowledge(
+                    text=text,
+                    session_id=scope_session_id,
+                    metadata=metadata,
+                )
+        else:
+            resolved_dataset = dataset or memory_manager.get_common_dataset_name()
+            success = await memory_manager.add_knowledge(
+                text=text,
+                metadata=metadata,
+                dataset_name=resolved_dataset,
+            )
 
         if success:
-            logger.info("Ingested document: %d chars, dataset=%s", len(text), dataset)
-            return JSONResponse({"success": True, "dataset": dataset})
+            resolved_dataset = dataset
+            if not resolved_dataset and scope == "session":
+                resolved_dataset = memory_manager.get_session_dataset_name(scope_session_id)
+            elif not resolved_dataset:
+                resolved_dataset = memory_manager.get_common_dataset_name()
+
+            logger.info("Ingested document: %d chars, dataset=%s", len(text), resolved_dataset)
+            return JSONResponse({
+                "success": True,
+                "dataset": resolved_dataset,
+                "scope": scope,
+                "session_id": scope_session_id or None,
+            })
         else:
             return JSONResponse(
                 {"success": False, "error": "Ingestion failed"},
@@ -921,7 +1778,9 @@ async def ingest_documents_batch(request: Request):
     try:
         data = await request.json()
         documents = data.get("documents", [])
-        dataset = data.get("dataset", "aviation_knowledge")
+        dataset = data.get("dataset", "")
+        scope = str(data.get("scope", "common")).lower()
+        scope_session_id = data.get("session_id", "")
 
         if not documents:
             return JSONResponse(
@@ -929,16 +1788,42 @@ async def ingest_documents_batch(request: Request):
                 status_code=400,
             )
 
-        success_count = await memory_manager.add_knowledge_batch(
-            documents=documents,
-            dataset_name=dataset,
-        )
+        if scope == "session":
+            if not scope_session_id:
+                return JSONResponse(
+                    {"success": False, "error": "session_id required when scope=session"},
+                    status_code=400,
+                )
+            if dataset:
+                success_count = await memory_manager.add_knowledge_batch(
+                    documents=documents,
+                    dataset_name=dataset,
+                )
+            else:
+                success_count = await memory_manager.add_session_knowledge_batch(
+                    documents=documents,
+                    session_id=scope_session_id,
+                )
+        else:
+            resolved_dataset = dataset or memory_manager.get_common_dataset_name()
+            success_count = await memory_manager.add_knowledge_batch(
+                documents=documents,
+                dataset_name=resolved_dataset,
+            )
+
+        resolved_dataset = dataset
+        if not resolved_dataset and scope == "session":
+            resolved_dataset = memory_manager.get_session_dataset_name(scope_session_id)
+        elif not resolved_dataset:
+            resolved_dataset = memory_manager.get_common_dataset_name()
 
         return JSONResponse({
             "success": success_count,
             "total": len(documents),
             "failed": len(documents) - success_count,
-            "dataset": dataset,
+            "dataset": resolved_dataset,
+            "scope": scope,
+            "session_id": scope_session_id or None,
         })
 
     except Exception as e:
@@ -952,7 +1837,9 @@ async def ingest_documents_batch(request: Request):
 @app.get("/api/knowledge/search")
 async def search_knowledge(
     query: str = "",
-    dataset: str = "aviation_knowledge",
+    dataset: str = "",
+    scope: str = "common",
+    session_id: str = "",
     limit: int = 5,
 ):
     """
@@ -979,14 +1866,30 @@ async def search_knowledge(
 
     try:
         limit = max(1, min(limit, 10))
+        scope = scope.lower()
+
+        if scope == "session" and not session_id and not dataset:
+            return JSONResponse(
+                {"error": "session_id required when scope=session and dataset is not provided"},
+                status_code=400,
+            )
+
+        if dataset:
+            resolved_dataset = dataset
+        elif scope == "session":
+            resolved_dataset = memory_manager.get_session_dataset_name(session_id)
+        else:
+            resolved_dataset = memory_manager.get_common_dataset_name()
 
         # Check cache first
-        cached_results = await cache.get_knowledge_search(query, dataset)
+        cached_results = await cache.get_knowledge_search(query, resolved_dataset)
         if cached_results:
             logger.debug("Cache HIT for knowledge search: %s", query[:80])
             return JSONResponse({
                 "query": query,
-                "dataset": dataset,
+                "dataset": resolved_dataset,
+                "scope": scope,
+                "session_id": session_id or None,
                 "results": cached_results,
                 "cached": True,
             })
@@ -994,16 +1897,18 @@ async def search_knowledge(
         # Cache miss: query knowledge graph
         results = await memory_manager.search_long_term(
             query=query,
-            dataset_name=dataset,
+            dataset_name=resolved_dataset,
             limit=limit,
         )
 
         # Cache the results (fire-and-forget)
-        asyncio.create_task(cache.set_knowledge_search(query, dataset, results))
+        asyncio.create_task(cache.set_knowledge_search(query, resolved_dataset, results))
 
         return JSONResponse({
             "query": query,
-            "dataset": dataset,
+            "dataset": resolved_dataset,
+            "scope": scope,
+            "session_id": session_id or None,
             "results": results or "No results found",
             "cached": False,
         })
@@ -1019,7 +1924,9 @@ async def search_knowledge(
 @app.get("/api/knowledge/entity/{entity_name}")
 async def get_entity_info(
     entity_name: str,
-    dataset: str = "aviation_knowledge",
+    dataset: str = "",
+    scope: str = "common",
+    session_id: str = "",
 ):
     """
     Retrieve entity information from knowledge graph.
@@ -1040,13 +1947,31 @@ async def get_entity_info(
         )
 
     try:
+        scope = scope.lower()
+        if dataset:
+            resolved_dataset = dataset
+        elif scope == "session":
+            if not session_id:
+                return JSONResponse(
+                    {"error": "session_id required when scope=session and dataset is not provided"},
+                    status_code=400,
+                )
+            resolved_dataset = memory_manager.get_session_dataset_name(session_id)
+        else:
+            resolved_dataset = memory_manager.get_common_dataset_name()
+
         entity = await memory_manager.get_entity(
             entity_name=entity_name,
-            dataset_name=dataset,
+            dataset_name=resolved_dataset,
         )
 
         if entity:
-            return JSONResponse({"entity": entity})
+            return JSONResponse({
+                "entity": entity,
+                "dataset": resolved_dataset,
+                "scope": scope,
+                "session_id": session_id or None,
+            })
         else:
             return JSONResponse(
                 {"error": f"Entity not found: {entity_name}"},
@@ -1085,6 +2010,11 @@ async def memory_status():
             "available": memory_manager.long_term_available,
             "provider": "cognee",
             "description": "Persistent knowledge graph (domain expertise)",
+        },
+        "knowledge_scopes": {
+            "common_dataset": memory_manager.get_common_dataset_name(),
+            "session_dataset_prefix": os.getenv("SESSION_KNOWLEDGE_PREFIX", "session_knowledge"),
+            "supported_scopes": ["common", "session"],
         },
         "cache": {
             "available": cache.available,
@@ -1386,9 +2316,45 @@ async def observability_status():
         "langfuse_enabled": _langfuse_enabled,
         "host": os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com") if _langfuse_enabled else None,
         "features": ["tracing", "scoring", "session_tracking"] if _langfuse_enabled else [],
+        "runtime": _runtime_stats(),
     })
 
 
+@app.get("/api/runtime/status")
+async def runtime_status():
+    """Operational runtime status for autoscaling and production readiness checks."""
+    return JSONResponse({
+        "status": "ok",
+        "runtime": _runtime_stats(),
+        "timestamp": _now_iso(),
+    })
+
+
+async def run_queue_worker_forever() -> None:
+    """Run only the workflow queue worker loop (no FastAPI server)."""
+    global global_mcp_client, global_graph
+
+    logging.basicConfig(level=logging.INFO)
+    await db.connect()
+    await memory_manager.init()
+    await cache.init()
+
+    if not global_graph:
+        global_graph, global_mcp_client, _ = await init_graph(memory_manager=memory_manager, db=db)
+
+    try:
+        await _workflow_worker_loop()
+    finally:
+        if global_mcp_client:
+            await global_mcp_client.cleanup()
+        await db.close()
+        await cache.close()
+
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    process_mode = os.getenv("AGENT_PROCESS_MODE", "api").lower()
+    if process_mode == "worker":
+        asyncio.run(run_queue_worker_forever())
+    else:
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=8000)

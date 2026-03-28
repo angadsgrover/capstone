@@ -76,7 +76,92 @@ services:
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      # Hardening + scale controls
+      EXECUTION_MODE: ${EXECUTION_MODE:-queued}
+      ENABLE_WORKFLOW_WORKER: "false"
+      EVENT_BACKEND: ${EVENT_BACKEND:-redis}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:80,http://localhost:5173}
+      CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-false}
+      REQUIRE_AUTH_SUBJECT: ${REQUIRE_AUTH_SUBJECT:-false}
+      AUTH_SUBJECT_USER_HEADER: ${AUTH_SUBJECT_USER_HEADER:-x-user-id}
+      AUTH_SUBJECT_TENANT_HEADER: ${AUTH_SUBJECT_TENANT_HEADER:-x-tenant-id}
+      AUTH_VERIFICATION_MODE: ${AUTH_VERIFICATION_MODE:-none}
+      AUTH_ALLOW_HEADER_FALLBACK: ${AUTH_ALLOW_HEADER_FALLBACK:-true}
+      AUTH_REQUIRE_VERIFIED_SUBJECT: ${AUTH_REQUIRE_VERIFIED_SUBJECT:-false}
+      JWT_ISSUER: ${JWT_ISSUER:-}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-}
+      JWT_ALGORITHMS: ${JWT_ALGORITHMS:-RS256}
+      JWT_JWKS_URL: ${JWT_JWKS_URL:-}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_LEEWAY_SECONDS: ${JWT_LEEWAY_SECONDS:-30}
+      JWT_SUBJECT_CLAIM: ${JWT_SUBJECT_CLAIM:-sub}
+      JWT_USER_ID_CLAIM: ${JWT_USER_ID_CLAIM:-sub}
+      JWT_TENANT_ID_CLAIM: ${JWT_TENANT_ID_CLAIM:-tenant_id}
+      MAX_REQUEST_BYTES: ${MAX_REQUEST_BYTES:-1048576}
+      MAX_INPUT_CHARS: ${MAX_INPUT_CHARS:-12000}
+      MAX_SESSION_ID_CHARS: ${MAX_SESSION_ID_CHARS:-128}
+      MAX_CONCURRENT_GRAPH_RUNS: ${MAX_CONCURRENT_GRAPH_RUNS:-120}
+      MAX_PENDING_EVENT_STREAMS: ${MAX_PENDING_EVENT_STREAMS:-2000}
+      EVENT_QUEUE_MAXSIZE: ${EVENT_QUEUE_MAXSIZE:-512}
+      RUN_REGISTRY_TTL_SECONDS: ${RUN_REGISTRY_TTL_SECONDS:-900}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      RATE_LIMIT_AGENT_PER_WINDOW: ${RATE_LIMIT_AGENT_PER_WINDOW:-30}
+      RATE_LIMIT_STREAM_PER_WINDOW: ${RATE_LIMIT_STREAM_PER_WINDOW:-20}
+      RATE_LIMIT_EXECUTE_PER_WINDOW: ${RATE_LIMIT_EXECUTE_PER_WINDOW:-20}
     expose: ["8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mcp-aviation-wx:
+        condition: service_started
+      mcp-hk-climate:
+        condition: service_started
+      mcp-adsb:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── Agent Worker (queue consumer for long workflows) ───────────────────────
+  agent-worker:
+    build: ./agent
+    command: ["python", "server.py"]
+    environment:
+      AGENT_PROCESS_MODE: worker
+      MCP_CONFIG: /app/mcp_config.docker.json
+      POSTGRES_DSN: postgresql://capstone:${POSTGRES_PASSWORD}@postgres:5432/capstone
+      REDIS_URL: redis://redis:6379/0
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      LLM_API_KEY: ${LLM_API_KEY}
+      MODEL_CHOICE: ${MODEL_CHOICE}
+      BASE_URL: ${BASE_URL}
+      EMBED_API_KEY: ${EMBED_API_KEY:-}
+      EMBED_BASE_URL: ${EMBED_BASE_URL:-}
+      COGNEE_ENABLED: ${COGNEE_ENABLED:-true}
+      NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      EXECUTION_MODE: ${EXECUTION_MODE:-queued}
+      EVENT_BACKEND: ${EVENT_BACKEND:-redis}
+      WORKFLOW_QUEUE_KEY: ${WORKFLOW_QUEUE_KEY:-agent:workflow:queue}
+      AUTH_VERIFICATION_MODE: ${AUTH_VERIFICATION_MODE:-none}
+      AUTH_ALLOW_HEADER_FALLBACK: ${AUTH_ALLOW_HEADER_FALLBACK:-true}
+      AUTH_REQUIRE_VERIFIED_SUBJECT: ${AUTH_REQUIRE_VERIFIED_SUBJECT:-false}
+      JWT_ISSUER: ${JWT_ISSUER:-}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-}
+      JWT_ALGORITHMS: ${JWT_ALGORITHMS:-RS256}
+      JWT_JWKS_URL: ${JWT_JWKS_URL:-}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_LEEWAY_SECONDS: ${JWT_LEEWAY_SECONDS:-30}
+      JWT_SUBJECT_CLAIM: ${JWT_SUBJECT_CLAIM:-sub}
+      JWT_USER_ID_CLAIM: ${JWT_USER_ID_CLAIM:-sub}
+      JWT_TENANT_ID_CLAIM: ${JWT_TENANT_ID_CLAIM:-tenant_id}
+      MAX_CONCURRENT_GRAPH_RUNS: ${MAX_CONCURRENT_GRAPH_RUNS:-120}
+      RUN_REGISTRY_TTL_SECONDS: ${RUN_REGISTRY_TTL_SECONDS:-900}
     depends_on:
       postgres:
         condition: service_healthy

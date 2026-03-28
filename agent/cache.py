@@ -457,3 +457,72 @@ class CacheManager:
         except Exception as e:
             logger.debug("Cache stats error: %s", e)
             return {"available": True, "error": str(e)}
+
+    # ── Distributed rate limiting helpers ────────────────────────────────────
+
+    async def check_rate_limit(
+        self,
+        bucket: str,
+        subject: str,
+        limit: int,
+        window_seconds: int,
+    ) -> dict[str, Any]:
+        """
+        Sliding-window-ish fixed bucket limiter using Redis INCR + EXPIRE.
+
+        Returns:
+            {
+                "allowed": bool,
+                "count": int,
+                "remaining": int,
+                "retry_after": int,
+                "limit": int,
+                "window_seconds": int,
+                "key": str,
+            }
+        """
+        key = self.make_key("rl", bucket, subject, str(window_seconds))
+
+        if not self.available:
+            # Graceful degradation: if Redis is unavailable, do not hard-block.
+            return {
+                "allowed": True,
+                "count": 0,
+                "remaining": limit,
+                "retry_after": 0,
+                "limit": limit,
+                "window_seconds": window_seconds,
+                "key": key,
+            }
+
+        try:
+            count = int(await self._redis.incr(key))
+            if count == 1:
+                await self._redis.expire(key, window_seconds)
+
+            ttl = int(await self._redis.ttl(key))
+            retry_after = max(ttl, 0)
+            allowed = count <= limit
+            remaining = max(limit - count, 0)
+
+            return {
+                "allowed": allowed,
+                "count": count,
+                "remaining": remaining,
+                "retry_after": retry_after,
+                "limit": limit,
+                "window_seconds": window_seconds,
+                "key": key,
+            }
+        except Exception as e:
+            logger.debug("Rate-limit check error (bucket=%s): %s", bucket, e)
+            return {
+                "allowed": True,
+                "count": 0,
+                "remaining": limit,
+                "retry_after": 0,
+                "limit": limit,
+                "window_seconds": window_seconds,
+                "key": key,
+                "error": str(e),
+            }
