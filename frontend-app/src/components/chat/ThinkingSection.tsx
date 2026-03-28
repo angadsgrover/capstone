@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { ChevronDown, ChevronRight, Brain, ListOrdered, Lightbulb, CheckCircle, Route, Sparkles, Clock, TrendingUp } from 'lucide-react'
 import { ThinkingStep } from '@/shared/types/agent'
 
@@ -6,20 +6,11 @@ interface ThinkingSectionProps {
   thinking?: ThinkingStep[]
   plan?: string[]
   route?: string
-  autoExpand?: boolean  // Auto-expand for complex queries
 }
 
-export default function ThinkingSection({ thinking, plan, route, autoExpand = false }: ThinkingSectionProps) {
-  // Auto-expand if more than 2 steps or if autoExpand is true
-  const shouldAutoExpand = autoExpand || (thinking && thinking.length > 2) || (plan && plan.length > 2)
-  const [isExpanded, setIsExpanded] = useState(shouldAutoExpand)
-
-  // Re-expand when new content arrives
-  useEffect(() => {
-    if (shouldAutoExpand && !isExpanded) {
-      setIsExpanded(true)
-    }
-  }, [thinking?.length, plan?.length])
+export default function ThinkingSection({ thinking, plan, route }: ThinkingSectionProps) {
+  // Default to collapsed - user explicitly opens if they want details
+  const [isExpanded, setIsExpanded] = useState(false)
 
   if ((!thinking || thinking.length === 0) && (!plan || plan.length === 0)) return null
 

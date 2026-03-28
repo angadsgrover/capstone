@@ -75,6 +75,34 @@ export default function MessageBubble({ message, isStreaming }: MessageBubblePro
               <p className="text-sm leading-relaxed whitespace-pre-wrap font-medium">{message.content}</p>
             ) : (
               <div className="prose prose-sm prose-invert max-w-none">
+                {/* Thinking and Tools sections (collapsed by default) - shown FIRST before final output */}
+                {((message.thinking && message.thinking.length > 0) || (message.plan && message.plan.length > 0) || (message.toolCalls && message.toolCalls.length > 0)) && (
+                  <div className="not-prose mb-4">
+                    {/* Thinking section */}
+                    <ThinkingSection
+                      thinking={message.thinking}
+                      plan={message.plan}
+                      route={message.route}
+                    />
+
+                    {/* Tool calls */}
+                    {message.toolCalls && message.toolCalls.length > 0 && (
+                      <ToolCallsSection toolCalls={message.toolCalls} />
+                    )}
+
+                    {/* Visual separator between thinking/tools and final output */}
+                    <div className="mt-4 flex items-center gap-3">
+                      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-outline-variant/30 to-transparent" />
+                      <span className="text-[10px] font-semibold text-on-surface-variant/60 uppercase tracking-wider flex items-center gap-1.5">
+                        <MaterialIcon icon="check_circle" className="text-secondary text-sm" filled />
+                        Final Output
+                      </span>
+                      <div className="flex-1 h-px bg-gradient-to-r from-transparent via-outline-variant/30 to-transparent" />
+                    </div>
+                  </div>
+                )}
+
+                {/* Main content / Final Output */}
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   components={{
@@ -162,22 +190,6 @@ export default function MessageBubble({ message, isStreaming }: MessageBubblePro
                 {/* Streaming cursor */}
                 {isStreaming && (
                   <span className="inline-block w-0.5 h-4 bg-secondary ml-0.5 animate-pulse align-text-bottom rounded-full shadow-glow-secondary" />
-                )}
-
-                {/* Thinking section - auto-expand for complex queries */}
-                <ThinkingSection
-                  thinking={message.thinking}
-                  plan={message.plan}
-                  route={message.route}
-                  autoExpand={(message.thinking && message.thinking.length > 2) || (message.plan && message.plan.length > 2)}
-                />
-
-                {/* Tool calls - auto-expand when > 2 tools */}
-                {message.toolCalls && message.toolCalls.length > 0 && (
-                  <ToolCallsSection
-                    toolCalls={message.toolCalls}
-                    autoExpand={message.toolCalls.length > 2}
-                  />
                 )}
               </div>
             )}

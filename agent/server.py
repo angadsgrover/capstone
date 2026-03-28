@@ -11,6 +11,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -50,16 +54,19 @@ def _init_langfuse() -> bool:
     try:
         from langfuse import Langfuse
 
+        # Support both LANGFUSE_HOST and LANGFUSE_BASE_URL for flexibility
+        langfuse_host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com"
+        
         # Initialize the singleton with explicit keys
         # This sets up the global client that get_client() will return
         Langfuse(
             public_key=public_key,
             secret_key=secret_key,
-            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+            host=langfuse_host,
             enabled=True,
         )
         _langfuse_enabled = True
-        logger.info("Langfuse initialized successfully")
+        logger.info("Langfuse initialized successfully (host: %s)", langfuse_host)
         return True
     except Exception as e:
         logger.warning("Langfuse initialization failed: %s", e)
@@ -393,6 +400,7 @@ async def ready() -> JSONResponse:
         "long_term_memory": memory_manager.long_term_available,
         "queue_backend": queue_backend_ok,
         "event_backend": event_backend_ok,
+        "langfuse": _langfuse_enabled,
     }
     critical_ok = checks["graph"] and checks["db"] and checks["queue_backend"] and checks["event_backend"]
     status = "ready" if critical_ok else "not_ready"
@@ -405,6 +413,36 @@ async def ready() -> JSONResponse:
         },
         status_code=code,
     )
+
+
+@app.get("/api/status")
+async def api_status() -> Dict[str, Any]:
+    """Detailed status endpoint for frontend dashboards."""
+    queue_backend_ok = cache.available if EXECUTION_MODE == "queued" else True
+    event_backend_ok = cache.available if EVENT_BACKEND == "redis" else True
+    
+    return {
+        "services": {
+            "agent": global_graph is not None,
+            "database": db.available,
+            "cache": cache.available,
+            "langfuse": _langfuse_enabled,
+            "short_term_memory": memory_manager.short_term_available,
+            "long_term_memory": memory_manager.long_term_available,
+        },
+        "event_tracking": {
+            "backend": EVENT_BACKEND,
+            "available": event_backend_ok,
+            "active_streams": len(run_started_at) if _redis_events_enabled() else len(event_queues),
+            "tracked_sessions": len(session_latest_run),
+        },
+        "langfuse": {
+            "enabled": _langfuse_enabled,
+            "host": (os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com") if _langfuse_enabled else None,
+        },
+        "runtime": _runtime_stats(),
+        "timestamp": _now_iso(),
+    }
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 
@@ -1414,6 +1452,20 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
         user_id=auth.get("user_id", ""),
     )
 
+    # Register run for workflow events (same as /api/agent/execute)
+    run_id = f"run-{uuid.uuid4().hex}"
+    now = time.time()
+    if not _redis_events_enabled():
+        event_queues[run_id] = asyncio.Queue(maxsize=EVENT_QUEUE_MAXSIZE)
+    session_latest_run[effective_session_id] = run_id
+    run_session_index[run_id] = effective_session_id
+    run_started_at[run_id] = now
+    run_dropped_events[run_id] = 0
+    
+    # Set Redis metadata for workflow events (if Redis enabled)
+    await _set_run_metadata(run_id, effective_session_id)
+    await _set_session_latest(effective_session_id, run_id)
+
     async def stream_tokens():
         global active_graph_runs, max_active_graph_runs_seen
 
@@ -1422,6 +1474,9 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
         step_counts: Dict[str, int] = {}
         streamed_chunk_counts: Dict[str, int] = {}
         router_start = 0.0
+        node_start_times: Dict[str, float] = {}
+        active_nodes: set[str] = set()
+        routing_emitted = False
         request_id = f"{effective_session_id}:{uuid.uuid4().hex}"
 
         await graph_run_semaphore.acquire()
@@ -1441,16 +1496,55 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                 node = meta.get("langgraph_node", "")
                 ts = _now_iso()
 
-                # ── Routing decision ─────────────────────────────────────────
-                if kind == "on_chain_start" and node == "router":
-                    router_start = time.monotonic()
+                # ── Node started (push workflow event) ───────────────────────
+                if kind == "on_chain_start" and node and node not in active_nodes:
+                    active_nodes.add(node)
+                    node_start_times[node] = time.monotonic()
+                    if node == "router":
+                        router_start = time.monotonic()
+                        await _push(run_id, {
+                            "nodeId": "router",
+                            "event_type": "node",
+                            "status": "started",
+                            "label": "🧭 Router",
+                            "details": "Classifying query...",
+                            "timestamp": ts,
+                            "raw": {},
+                        })
 
+                # ── Routing decision ─────────────────────────────────────────
                 if kind == "on_chain_start" and node in SPECIALIST_NODES:
                     current_specialist = node
                     step_counts[node] = 0
                     streamed_chunk_counts[node] = 0
                     router_dur = int((time.monotonic() - router_start) * 1000) if router_start else 0
                     yield f"event: route\ndata: {json.dumps({'route': node, 'specialist': node, 'duration': router_dur, 'timestamp': ts})}\n\n"
+                    
+                    # Push routing decision for workflow visualization
+                    if not routing_emitted:
+                        routing_emitted = True
+                        await _push(run_id, {
+                            "nodeId": "router",
+                            "event_type": "routing_decision",
+                            "status": "completed",
+                            "label": f"Router → {node}",
+                            "details": f"Query classified as: {node}",
+                            "route": node,
+                            "duration_ms": router_dur,
+                            "timestamp": ts,
+                            "raw": {"node": "router", "route": node},
+                        })
+                    
+                    # Push specialist node started
+                    await _push(run_id, {
+                        "nodeId": node,
+                        "event_type": "node",
+                        "status": "started",
+                        "label": _NODE_LABELS.get(node, node),
+                        "details": "Processing query...",
+                        "timestamp": ts,
+                        "raw": {},
+                    })
 
                 # Planning internals: emit explicit plan + execution-step telemetry
                 if kind == "on_chain_end" and node == "plan":
@@ -1529,6 +1623,19 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                     tool_input = ev["data"].get("input", {})
                     tool_start_times[tool_name] = time.monotonic()
                     yield f"event: tool_start\ndata: {json.dumps({'tool_start': tool_name, 'name': tool_name, 'tool_input': tool_input, 'input': tool_input, 'timestamp': ts})}\n\n"
+                    
+                    # Push tool started event for workflow visualization
+                    await _push(run_id, {
+                        "nodeId": tool_name,
+                        "event_type": "tool",
+                        "status": "started",
+                        "label": tool_name,
+                        "details": f"Executing {tool_name}...",
+                        "tool_input": tool_input,
+                        "parent_node": current_specialist or "general",
+                        "timestamp": ts,
+                        "raw": {"tool": tool_name, "input": tool_input},
+                    })
 
                 # ── Tool end ─────────────────────────────────────────────────
                 elif kind == "on_tool_end":
@@ -1539,10 +1646,50 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                     # Truncate output for SSE (full output in workflow events)
                     output_preview = output_str[:500] if output_str else ""
                     yield f"event: tool_end\ndata: {json.dumps({'tool_end': tool_name, 'name': tool_name, 'output': output_preview, 'duration': duration_ms, 'timestamp': ts})}\n\n"
+                    
+                    # Push tool completed event for workflow visualization
+                    await _push(run_id, {
+                        "nodeId": tool_name,
+                        "event_type": "tool",
+                        "status": "completed",
+                        "label": tool_name,
+                        "details": f"Completed in {duration_ms}ms",
+                        "duration_ms": duration_ms,
+                        "parent_node": current_specialist or "general",
+                        "timestamp": ts,
+                        "raw": {"tool": tool_name, "output": output_preview[:200]},
+                    })
 
+                # ── Node completion ──────────────────────────────────────────
+                if kind == "on_chain_end" and node in active_nodes:
+                    duration_ms = int((time.monotonic() - node_start_times.get(node, time.monotonic())) * 1000)
+                    await _push(run_id, {
+                        "nodeId": node,
+                        "event_type": "node",
+                        "status": "completed",
+                        "label": _NODE_LABELS.get(node, node),
+                        "details": f"Completed in {duration_ms}ms",
+                        "duration_ms": duration_ms,
+                        "timestamp": ts,
+                        "raw": {},
+                    })
+                    active_nodes.discard(node)
+
+            # Push done event for workflow visualization
+            await _push(run_id, {"__done__": True})
             yield "event: end\ndata: {}\n\n"
         except Exception as e:
             logger.exception("Streaming error for session %s", effective_session_id)
+            # Push error event for workflow visualization
+            await _push(run_id, {
+                "nodeId": "error",
+                "event_type": "error",
+                "status": "failed",
+                "details": str(e),
+                "timestamp": _now_iso(),
+                "raw": {},
+            })
+            await _push(run_id, {"__done__": True})
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
             yield "event: end\ndata: {}\n\n"
         finally:
@@ -1550,6 +1697,8 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                 active_graph_runs -= 1
             graph_run_semaphore.release()
             mcp_module.clear_request_context()
+            # Mark run as completed for cleanup tracking
+            run_completed_at[run_id] = time.time()
 
     return StreamingResponse(
         stream_tokens(),

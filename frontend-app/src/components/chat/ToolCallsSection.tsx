@@ -1,22 +1,14 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { ChevronDown, ChevronRight, Wrench, CheckCircle, AlertCircle, Loader2, RotateCcw, Clock, Zap } from 'lucide-react'
 import { ToolCall } from '@/shared/types/agent'
 
 interface ToolCallsSectionProps {
   toolCalls: ToolCall[]
-  autoExpand?: boolean  // Auto-expand for complex tool sequences
 }
 
-export default function ToolCallsSection({ toolCalls, autoExpand = false }: ToolCallsSectionProps) {
-  const shouldAutoExpand = autoExpand || toolCalls.length > 2
-  const [isExpanded, setIsExpanded] = useState(shouldAutoExpand)
-
-  // Re-expand when new tools arrive
-  useEffect(() => {
-    if (shouldAutoExpand && !isExpanded) {
-      setIsExpanded(true)
-    }
-  }, [toolCalls.length])
+export default function ToolCallsSection({ toolCalls }: ToolCallsSectionProps) {
+  // Default to collapsed - user explicitly opens if they want details
+  const [isExpanded, setIsExpanded] = useState(false)
 
   if (!toolCalls || toolCalls.length === 0) return null
 

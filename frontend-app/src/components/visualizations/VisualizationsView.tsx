@@ -101,7 +101,13 @@ export default function VisualizationsView() {
       setPathNodes(nodes)
       setPathEdges(edges)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      // Check for database unavailable (503 error)
+      if (msg.includes('503') || msg.toLowerCase().includes('database')) {
+        setError('Database unavailable. Please ensure PostgreSQL is running and accessible.')
+      } else {
+        setError(msg)
+      }
     } finally {
       setLoading(false)
     }

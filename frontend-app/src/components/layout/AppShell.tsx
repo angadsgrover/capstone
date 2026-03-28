@@ -4,10 +4,9 @@ import MaterialIcon from '@/components/ui/MaterialIcon'
 import { cn } from '@/lib/utils'
 
 const NAV_ITEMS = [
-  { label: 'Chat',           path: '/chat',     icon: 'chat_bubble',     short: '1' },
-  { label: 'Workflow',       path: '/workflow', icon: 'account_tree',    short: '2' },
-  { label: 'Logs',           path: '/logs',     icon: 'terminal',        short: '3' },
-  { label: 'Visuals',        path: '/visuals',  icon: 'monitoring',      short: '4' },
+  { label: 'Agent',          path: '/chat',     icon: 'chat_bubble',     short: '1' },
+  { label: 'Logs',           path: '/logs',     icon: 'terminal',        short: '2' },
+  { label: 'Visuals',        path: '/visuals',  icon: 'monitoring',      short: '3' },
 ]
 
 interface AppShellProps {

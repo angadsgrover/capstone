@@ -5,6 +5,38 @@ import MaterialIcon from '@/components/ui/MaterialIcon'
 import { cn } from '@/lib/utils'
 
 const API_BASE = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:8000'
+const CHAT_SESSION_KEY = 'chatSessionId'
+
+// Get the same session ID used by the chat
+function getChatSessionId(): string {
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+    return 'default'
+  }
+  return localStorage.getItem(CHAT_SESSION_KEY) || 'default'
+}
+
+interface BackendStatus {
+  langfuse: boolean
+  eventBackend: string
+  eventAvailable: boolean
+  trackedSessions: number
+}
+
+async function fetchBackendStatus(): Promise<BackendStatus | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/status`)
+    if (!res.ok) return null
+    const data = await res.json()
+    return {
+      langfuse: data.langfuse?.enabled ?? false,
+      eventBackend: data.event_tracking?.backend ?? 'memory',
+      eventAvailable: data.event_tracking?.available ?? false,
+      trackedSessions: data.event_tracking?.tracked_sessions ?? 0,
+    }
+  } catch {
+    return null
+  }
+}
 
 interface LogEvent {
   id: string
@@ -76,8 +108,15 @@ export default function LogsView() {
   const [isWatching, setIsWatching] = useState(false)
   const [filter, setFilter] = useState<FilterType>('all')
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null)
   const cancelRef = useRef<(() => void) | null>(null)
   const tableEndRef = useRef<HTMLDivElement>(null)
+  const startedRef = useRef(false)
+
+  // Fetch backend status on mount
+  useEffect(() => {
+    fetchBackendStatus().then(setBackendStatus)
+  }, [])
 
   useEffect(() => {
     tableEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -88,7 +127,8 @@ export default function LogsView() {
   const startWatching = useCallback(() => {
     if (isWatching) return
     setIsWatching(true)
-    cancelRef.current = streamAgent(`${API_BASE}/api/agent/events?session_id=default`, {
+    const sessionId = getChatSessionId()
+    cancelRef.current = streamAgent(`${API_BASE}/api/agent/events?session_id=${encodeURIComponent(sessionId)}`, {
       onChunk: (rawData) => {
         try {
           const data = JSON.parse(rawData)
@@ -117,6 +157,18 @@ export default function LogsView() {
       onComplete: () => setIsWatching(false),
     })
   }, [isWatching])
+
+  // Auto-start watching on mount
+  useEffect(() => {
+    if (!startedRef.current) {
+      startedRef.current = true
+      // Small delay to ensure component is fully mounted
+      const timer = setTimeout(() => {
+        startWatching()
+      }, 100)
+      return () => clearTimeout(timer)
+    }
+  }, [startWatching])
 
   const stopWatching = useCallback(() => {
     cancelRef.current?.()
@@ -397,6 +449,48 @@ export default function LogsView() {
           </div>
         )}
         <div ref={tableEndRef} />
+      </div>
+
+      {/* Status Bar */}
+      <div className={cn(
+        "rounded-2xl p-4 border border-outline-variant/20",
+        "bg-surface-container-low/80 shadow-md"
+      )}>
+        <div className="flex items-center justify-between text-xs text-on-surface-variant">
+          <div className="flex items-center gap-6">
+            {/* Session info */}
+            <div className="flex items-center gap-2">
+              <MaterialIcon icon="fingerprint" className="text-base" />
+              <span className="font-mono text-[10px]">Session: {getChatSessionId().slice(0, 8)}...</span>
+            </div>
+            
+            {/* Backend status */}
+            {backendStatus && (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className={cn(
+                    "w-2 h-2 rounded-full",
+                    backendStatus.eventAvailable ? "bg-[hsl(var(--status-vfr))]" : "bg-error"
+                  )} />
+                  <span>Events: {backendStatus.eventBackend}</span>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <span className={cn(
+                    "w-2 h-2 rounded-full",
+                    backendStatus.langfuse ? "bg-[hsl(var(--status-vfr))]" : "bg-on-surface-variant/30"
+                  )} />
+                  <span>Langfuse: {backendStatus.langfuse ? 'Active' : 'Disabled'}</span>
+                </div>
+              </>
+            )}
+          </div>
+          
+          <div className="flex items-center gap-2 text-[10px]">
+            <MaterialIcon icon="info" className="text-base" />
+            <span>Events stream from current chat session</span>
+          </div>
+        </div>
       </div>
     </div>
   )
