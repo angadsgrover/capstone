@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Wrench, CheckCircle, AlertCircle, Loader2, RotateCcw, Clock, Zap } from 'lucide-react'
+import { Accordion, AccordionDetails, AccordionSummary, Box, Chip, Paper, Stack, Typography } from '@mui/material'
 import { ToolCall } from '@/shared/types/agent'
 
 interface ToolCallsSectionProps {
@@ -7,7 +8,6 @@ interface ToolCallsSectionProps {
 }
 
 export default function ToolCallsSection({ toolCalls }: ToolCallsSectionProps) {
-  // Default to collapsed - user explicitly opens if they want details
   const [isExpanded, setIsExpanded] = useState(false)
 
   if (!toolCalls || toolCalls.length === 0) return null
@@ -18,60 +18,50 @@ export default function ToolCallsSection({ toolCalls }: ToolCallsSectionProps) {
   const totalDuration = toolCalls.reduce((sum, t) => sum + (t.duration || 0), 0)
 
   return (
-    <div className="mt-4 rounded-xl border border-tertiary/30 overflow-hidden bg-gradient-to-br from-tertiary/12 to-secondary/10 backdrop-blur-sm shadow-lg">
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2.5 px-4 py-3.5 text-xs font-medium text-tertiary hover:bg-surface-container-high/40 transition-colors group"
+    <Accordion
+      expanded={isExpanded}
+      onChange={(_, expanded) => setIsExpanded(expanded)}
+      disableGutters
+      sx={{
+        mt: 2,
+        border: (theme) => `1px solid ${theme.palette.divider}`,
+        borderRadius: 2,
+        overflow: 'hidden',
+        '&::before': { display: 'none' },
+      }}
+    >
+      <AccordionSummary
+        expandIcon={isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+        sx={{
+          px: 2,
+          bgcolor: 'action.hover',
+          '& .MuiAccordionSummary-content': {
+            alignItems: 'center',
+            gap: 1,
+            flexWrap: 'wrap',
+          },
+        }}
       >
-        <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-tertiary/20 group-hover:bg-tertiary/30 transition-colors">
-          {isExpanded ? (
-            <ChevronDown className="h-4 w-4 text-tertiary" />
-          ) : (
-            <ChevronRight className="h-4 w-4 text-tertiary" />
-          )}
-        </div>
-        <Wrench className="h-4.5 w-4.5 text-tertiary" />
-        <span className="font-bold text-sm">Tools Executed</span>
-        <span className="text-tertiary/70 font-semibold">({toolCalls.length})</span>
+        <Wrench size={16} />
+        <Typography variant="subtitle2" fontWeight={700}>
+          Tools Executed
+        </Typography>
+        <Chip size="small" label={`${toolCalls.length}`} />
 
-        <div className="flex gap-2 ml-auto items-center">
-          {/* Total duration */}
-          {totalDuration > 0 && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-surface-container-high/60 text-on-surface-variant rounded-md text-[10px] font-mono font-bold border border-outline-variant/20">
-              <Zap className="h-3 w-3" />
-              {totalDuration}ms total
-            </span>
-          )}
+        {totalDuration > 0 && <Chip size="small" icon={<Zap size={14} />} label={`${totalDuration}ms`} />}
+        {runningCount > 0 && <Chip size="small" color="primary" icon={<Loader2 size={14} />} label={`${runningCount} running`} />}
+        {successCount > 0 && <Chip size="small" color="success" icon={<CheckCircle size={14} />} label={`${successCount} ok`} />}
+        {errorCount > 0 && <Chip size="small" color="error" icon={<AlertCircle size={14} />} label={`${errorCount} errors`} />}
+      </AccordionSummary>
 
-          {runningCount > 0 && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-primary/15 text-primary rounded-md text-[10px] font-bold border border-primary/10 animate-pulse">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              {runningCount}
-            </span>
-          )}
-          {successCount > 0 && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-secondary/15 text-secondary rounded-md text-[10px] font-bold border border-secondary/10">
-              <CheckCircle className="h-3 w-3" />
-              {successCount}
-            </span>
-          )}
-          {errorCount > 0 && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-error/15 text-error rounded-md text-[10px] font-bold border border-error/10">
-              <AlertCircle className="h-3 w-3" />
-              {errorCount}
-            </span>
-          )}
-        </div>
-      </button>
-
-      {isExpanded && (
-        <div className="px-4 pb-4 space-y-2">
+      <AccordionDetails sx={{ px: 2, pb: 2 }}>
+        <Stack spacing={1.2}>
           {toolCalls.map((tool, idx) => (
             <ToolCallItem key={idx} tool={tool} index={idx} />
           ))}
-        </div>
-      )}
-    </div>
+        </Stack>
+      </AccordionDetails>
+    </Accordion>
   )
 }
 
@@ -80,109 +70,103 @@ function ToolCallItem({ tool, index }: { tool: ToolCall; index: number }) {
 
   const statusConfig = {
     running: {
-      icon: <Loader2 className="h-3.5 w-3.5 text-primary animate-spin" />,
-      bg: 'bg-primary/10',
-      border: 'border-primary/20',
+      icon: <Loader2 size={14} />,
+      chipColor: 'primary' as const,
     },
     success: {
-      icon: <CheckCircle className="h-3.5 w-3.5 text-secondary" />,
-      bg: 'bg-secondary/10',
-      border: 'border-secondary/20',
+      icon: <CheckCircle size={14} />,
+      chipColor: 'success' as const,
     },
     error: {
-      icon: <AlertCircle className="h-3.5 w-3.5 text-error" />,
-      bg: 'bg-error/10',
-      border: 'border-error/20',
+      icon: <AlertCircle size={14} />,
+      chipColor: 'error' as const,
     },
   }
 
   const status = tool.status ? (statusConfig[tool.status] || statusConfig.success) : statusConfig.success
 
   return (
-    <div className={`rounded-xl border ${status.border} ${status.bg} overflow-hidden transition-all duration-200 ${showDetails ? 'ring-1 ring-outline-variant/20' : ''}`}>
-      <button
+    <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
+      <Box
+        role="button"
         onClick={() => setShowDetails(!showDetails)}
-        className="w-full flex items-center gap-3 px-3.5 py-3 text-xs hover:bg-surface-container-high/30 transition-colors group"
+        sx={{
+          px: 1.5,
+          py: 1.3,
+          cursor: 'pointer',
+          display: 'flex',
+          gap: 1,
+          alignItems: 'center',
+          '&:hover': { bgcolor: 'action.hover' },
+        }}
       >
-        {/* Step number */}
-        <div className="flex-shrink-0 w-6 h-6 rounded-lg bg-tertiary/20 flex items-center justify-center text-tertiary text-[10px] font-bold shadow-sm group-hover:scale-110 transition-transform">
-          {index + 1}
-        </div>
+        <Chip size="small" label={index + 1} />
+        <Chip size="small" color={status.chipColor} icon={status.icon} label={tool.status ?? 'success'} />
+        <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600, flex: 1 }} noWrap>
+          {tool.name}
+        </Typography>
 
-        <div className="flex-shrink-0 w-6 h-6 rounded-lg bg-surface-container-high/70 flex items-center justify-center">
-          {status.icon}
-        </div>
-
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <span className="font-mono font-bold text-on-surface truncate text-sm">
-            {tool.name}
-          </span>
-
-          {tool.retries && tool.retries > 0 && (
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-tertiary/15 text-tertiary rounded text-[9px] font-medium">
-              <RotateCcw className="h-2.5 w-2.5" />
-              {tool.retries}
-            </span>
-          )}
-        </div>
-
-        {tool.duration !== undefined && (
-          <span className="inline-flex items-center gap-1 text-[10px] text-on-surface-variant/80 font-mono font-semibold">
-            <Zap className="h-3 w-3" />
-            {tool.duration}ms
-          </span>
+        {tool.retries && tool.retries > 0 && (
+          <Chip size="small" icon={<RotateCcw size={12} />} label={`${tool.retries} retry`} />
         )}
 
-        <ChevronDown className={`h-3.5 w-3.5 text-on-surface-variant/70 transition-transform duration-200 ${showDetails ? 'rotate-180' : ''}`} />
-      </button>
+        {tool.duration !== undefined && (
+          <Chip size="small" icon={<Zap size={12} />} label={`${tool.duration}ms`} />
+        )}
+
+        <ChevronDown size={16} style={{ transform: showDetails ? 'rotate(180deg)' : 'none', transition: 'transform 150ms ease' }} />
+      </Box>
 
       {showDetails && (
-        <div className="px-3.5 pb-3 space-y-3 border-t border-outline-variant/15">
-          <div className="pt-3">
-            <div className="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider mb-1.5">
+        <Stack spacing={1.2} sx={{ px: 1.5, pb: 1.5, pt: 0.4, borderTop: (theme) => `1px solid ${theme.palette.divider}` }}>
+          <Box>
+            <Typography variant="caption" fontWeight={700} color="text.secondary">
               Input
-            </div>
-            <pre className="bg-surface-container-lowest/85 text-on-surface px-3 py-2 rounded-lg text-[11px] overflow-x-auto font-mono border border-outline-variant/15">
-              {JSON.stringify(tool.input, null, 2)}
-            </pre>
-          </div>
+            </Typography>
+            <Paper variant="outlined" sx={{ mt: 0.5, p: 1, bgcolor: 'action.hover' }}>
+              <Typography component="pre" variant="caption" sx={{ m: 0, whiteSpace: 'pre-wrap', overflowX: 'auto', fontFamily: 'monospace' }}>
+                {JSON.stringify(tool.input, null, 2)}
+              </Typography>
+            </Paper>
+          </Box>
 
           {tool.output && (
-            <div>
-              <div className="text-[10px] font-semibold text-secondary uppercase tracking-wider mb-1.5">
+            <Box>
+              <Typography variant="caption" fontWeight={700} color="success.main">
                 Output
-              </div>
-              <pre className="bg-surface-container-lowest/85 text-on-surface px-3 py-2 rounded-lg text-[11px] overflow-x-auto font-mono max-h-32 overflow-y-auto border border-secondary/15">
-                {typeof tool.output === 'string' ? tool.output : JSON.stringify(tool.output, null, 2)}
-              </pre>
-            </div>
+              </Typography>
+              <Paper variant="outlined" sx={{ mt: 0.5, p: 1, bgcolor: 'action.hover', maxHeight: 180, overflow: 'auto' }}>
+                <Typography component="pre" variant="caption" sx={{ m: 0, whiteSpace: 'pre-wrap', overflowX: 'auto', fontFamily: 'monospace' }}>
+                  {typeof tool.output === 'string' ? tool.output : JSON.stringify(tool.output, null, 2)}
+                </Typography>
+              </Paper>
+            </Box>
           )}
 
           {tool.error && (
-            <div>
-              <div className="text-[10px] font-semibold text-error uppercase tracking-wider mb-1.5">
+            <Box>
+              <Typography variant="caption" fontWeight={700} color="error.main">
                 Error
-              </div>
-              <pre className="bg-error/10 text-error px-3 py-2 rounded-lg text-[11px] overflow-x-auto font-mono border border-error/20">
-                {tool.error}
-              </pre>
-            </div>
+              </Typography>
+              <Paper variant="outlined" sx={{ mt: 0.5, p: 1, bgcolor: 'error.50' }}>
+                <Typography component="pre" variant="caption" sx={{ m: 0, whiteSpace: 'pre-wrap', overflowX: 'auto', fontFamily: 'monospace' }}>
+                  {tool.error}
+                </Typography>
+              </Paper>
+            </Box>
           )}
 
           {tool.startTime && (
-            <div className="flex items-center gap-2 pt-2 border-t border-outline-variant/10 text-[10px] text-on-surface-variant/80">
-              <Clock className="h-3 w-3" />
-              <span>Started: {new Date(tool.startTime).toLocaleTimeString()}</span>
-              {tool.endTime && (
-                <>
-                  <span>→</span>
-                  <span>Ended: {new Date(tool.endTime).toLocaleTimeString()}</span>
-                </>
-              )}
-            </div>
+            <Stack direction="row" spacing={0.7} alignItems="center">
+              <Clock size={13} />
+              <Typography variant="caption" color="text.secondary">
+                Started: {new Date(tool.startTime).toLocaleTimeString()}
+                {tool.endTime ? ` -> Ended: ${new Date(tool.endTime).toLocaleTimeString()}` : ''}
+              </Typography>
+            </Stack>
           )}
-        </div>
+        </Stack>
       )}
-    </div>
+    </Paper>
   )
 }

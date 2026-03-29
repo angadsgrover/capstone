@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
+import { alpha, Box, Button, Chip, CircularProgress, Paper, Stack, Typography, useTheme } from '@mui/material'
 import ReactFlow, {
   Background,
   Controls,
@@ -20,7 +21,6 @@ import { Message } from '@/shared/types/agent'
 import MessageBubble from './chat/MessageBubble'
 import ChatInput from './chat/ChatInput'
 import MaterialIcon from '@/components/ui/MaterialIcon'
-import { cn } from '@/lib/utils'
 
 const API_BASE = import.meta.env.VITE_AGENT_API_URL
   ?? (import.meta.env.DEV ? 'http://localhost:8000' : window.location.origin)
@@ -66,20 +66,29 @@ function AgentNode({ data }: NodeProps) {
     <>
       <Handle type="target" position={Position.Top} />
       <div
-        className={cn(
-          "px-4 py-2.5 rounded-xl text-xs font-semibold min-w-[120px] text-center transition-all duration-300",
-          "backdrop-blur-xl border-2 shadow-lg"
-        )}
-        style={{ borderColor: colors.border, backgroundColor: colors.bg, color: colors.text }}
+        style={{
+          padding: '10px 14px',
+          borderRadius: 14,
+          fontSize: 12,
+          fontWeight: 600,
+          minWidth: 120,
+          textAlign: 'center',
+          transition: 'all 220ms ease',
+          backdropFilter: 'blur(8px)',
+          border: `2px solid ${colors.border}`,
+          boxShadow: '0 8px 18px rgba(0, 0, 0, 0.2)',
+          backgroundColor: colors.bg,
+          color: colors.text,
+        }}
       >
         {data.status === 'running' && (
-          <div className="mb-1.5 h-0.5 w-full overflow-hidden rounded-full" style={{ backgroundColor: `${colors.border}33` }}>
-            <div className="h-full w-1/2 rounded-full animate-[shimmer_1s_ease-in-out_infinite]" style={{ backgroundColor: colors.border }} />
+          <div style={{ marginBottom: 6, height: 2, width: '100%', overflow: 'hidden', borderRadius: 999, backgroundColor: `${colors.border}33` }}>
+            <div style={{ height: '100%', width: '50%', borderRadius: 999, backgroundColor: colors.border, animation: 'shimmer 1s ease-in-out infinite' }} />
           </div>
         )}
-        <p className="font-bold">{data.label}</p>
+        <p style={{ fontWeight: 700 }}>{data.label}</p>
         {data.details && (
-          <p className="text-[10px] mt-1 max-w-[140px] truncate opacity-70">{data.details}</p>
+          <p style={{ fontSize: 10, marginTop: 4, maxWidth: 140, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', opacity: 0.7 }}>{data.details}</p>
         )}
       </div>
       <Handle type="source" position={Position.Bottom} />
@@ -93,18 +102,27 @@ function ToolNode({ data }: NodeProps) {
     <>
       <Handle type="target" position={Position.Top} />
       <div
-        className={cn(
-          "px-2.5 py-2 rounded-lg text-[10px] shadow-md border-2 min-w-[100px] max-w-[160px] text-center transition-all duration-300",
-          "backdrop-blur-sm"
-        )}
-        style={{ borderColor: colors.border, backgroundColor: colors.bg, color: colors.text }}
+        style={{
+          padding: '8px 10px',
+          borderRadius: 10,
+          fontSize: 10,
+          boxShadow: '0 6px 14px rgba(0, 0, 0, 0.2)',
+          border: `2px solid ${colors.border}`,
+          minWidth: 100,
+          maxWidth: 160,
+          textAlign: 'center',
+          transition: 'all 220ms ease',
+          backdropFilter: 'blur(4px)',
+          backgroundColor: colors.bg,
+          color: colors.text,
+        }}
       >
-        <p className="font-mono font-bold truncate">{data.label}</p>
+        <p style={{ fontFamily: 'monospace', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{data.label}</p>
         {data.input && (
-          <p className="mt-0.5 truncate opacity-60">{data.input}</p>
+          <p style={{ marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', opacity: 0.6 }}>{data.input}</p>
         )}
         {data.duration && (
-          <p className="mt-0.5 opacity-60">{data.duration}</p>
+          <p style={{ marginTop: 2, opacity: 0.6 }}>{data.duration}</p>
         )}
       </div>
     </>
@@ -149,6 +167,7 @@ const TOPOLOGY_EDGES: Edge[] = [
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function UnifiedAgentView() {
+  const theme = useTheme()
   const { messages, isLoading, loadFromStorage, setLoading, addMessage, clearMessages } = useChatStore()
   const { addLog, clearLogs } = useWorkflowStore()
 
@@ -435,153 +454,155 @@ export default function UnifiedAgentView() {
   const isIdle = !isLoading && !streamingMsg
 
   return (
-    <div className="flex flex-col h-full w-full relative">
-      {/* Toggle workflow button */}
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', p: { xs: 2, md: 3 }, gap: 1.5 }}>
       {messages.length > 0 && (
-        <div className="z-20 flex flex-wrap justify-end gap-2 px-4 pt-3 sm:px-6 md:px-8">
-          <button
+        <Stack direction="row" justifyContent="flex-end" spacing={1} flexWrap="wrap" useFlexGap>
+          <Button
+            variant={showWorkflow ? 'contained' : 'outlined'}
+            color={showWorkflow ? 'secondary' : 'primary'}
             onClick={() => setShowWorkflow(!showWorkflow)}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all font-medium text-xs uppercase tracking-wider shadow-lg",
-              "bg-surface-container-high/80 backdrop-blur-sm border border-outline-variant/20",
-              showWorkflow
-                ? "text-secondary border-secondary/50 bg-secondary/10"
-                : "text-on-surface-variant hover:border-secondary/30 hover:bg-secondary/5"
-            )}
+            startIcon={<MaterialIcon icon={showWorkflow ? 'visibility_off' : 'account_tree'} />}
           >
-            <MaterialIcon icon={showWorkflow ? "visibility_off" : "account_tree"} className="text-base" />
-            <span>{showWorkflow ? 'Hide' : 'Show'} Workflow</span>
-          </button>
+            {showWorkflow ? 'Hide Workflow' : 'Show Workflow'}
+          </Button>
 
-          <button
+          <Button
+            variant="outlined"
+            color="error"
             onClick={handleClear}
-            title="Clear all (⌘K)"
             disabled={!isIdle}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all",
-              "bg-surface-container-high/80 backdrop-blur-sm border border-outline-variant/20",
-              "text-on-surface-variant text-xs font-medium uppercase tracking-wider shadow-lg",
-              isIdle
-                ? "hover:border-error/50 hover:text-error hover:bg-error/5 hover:shadow-error/20 active:scale-95 cursor-pointer"
-                : "opacity-50 cursor-not-allowed"
-            )}
+            startIcon={<MaterialIcon icon="delete" />}
           >
-            <MaterialIcon icon="delete" className="text-base" />
-            <span>Clear</span>
-            <kbd className="ml-1 hidden px-1.5 py-0.5 rounded bg-surface-container-highest/50 text-[9px] border border-outline-variant/20 sm:inline-flex">⌘K</kbd>
-          </button>
-        </div>
+            Clear
+          </Button>
+        </Stack>
       )}
 
-      <div className={cn(
-        "flex-1 overflow-hidden flex",
-        showWorkflow && messages.length > 0 ? "flex-col xl:flex-row" : "flex-col"
-      )}>
-        {/* Chat column */}
-        <div className={cn(
-          "flex flex-col transition-all duration-300",
-          showWorkflow && messages.length > 0
-            ? "w-full xl:w-1/2 xl:border-r xl:border-outline-variant/20"
-            : "w-full"
-        )}>
-          {/* Background decoration */}
-          <div className="absolute top-1/4 right-20 w-96 h-96 bg-primary/5 rounded-full blur-[120px] -z-10 pointer-events-none" />
-          <div className="absolute bottom-40 left-20 w-80 h-80 bg-secondary/5 rounded-full blur-[100px] -z-10 pointer-events-none" />
-
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-4 py-6 space-y-8 sm:px-6 md:px-10 lg:px-12">
+      <Stack
+        direction={{ xs: 'column', xl: showWorkflow && messages.length > 0 ? 'row' : 'column' }}
+        spacing={1.5}
+        sx={{ flex: 1, minHeight: 0 }}
+      >
+        <Paper
+          variant="outlined"
+          sx={{
+            flex: showWorkflow && messages.length > 0 ? { xs: 1, xl: 0.52 } : 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            bgcolor: alpha(theme.palette.background.paper, 0.75),
+            backdropFilter: 'blur(10px)',
+          }}
+        >
+          <Box
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              overflowY: 'auto',
+              p: { xs: 2, sm: 2.5, md: 3 },
+            }}
+          >
             {messages.length === 0 && !streamingMsg ? (
-              <div className="flex flex-col items-center justify-center h-full text-center py-12 max-w-5xl mx-auto">
-                {/* Hero */}
-                <div className="relative mb-8 flex justify-center">
-                  <div className="absolute inset-0 bg-secondary/20 blur-2xl rounded-full animate-pulse" />
-                  <div className="relative w-24 h-24 bg-surface-container-high rounded-[2rem] flex items-center justify-center border border-outline-variant/20 glass-panel">
-                    <MaterialIcon icon="cyclone" className="text-secondary text-5xl" filled />
-                  </div>
-                </div>
+              <Stack alignItems="center" justifyContent="center" spacing={2} sx={{ minHeight: '100%', textAlign: 'center', py: 3 }}>
+                <Box
+                  sx={{
+                    width: 88,
+                    height: 88,
+                    borderRadius: 5,
+                    display: 'grid',
+                    placeItems: 'center',
+                    color: 'secondary.main',
+                    bgcolor: alpha(theme.palette.secondary.main, 0.12),
+                  }}
+                >
+                  <MaterialIcon icon="cyclone" filled />
+                </Box>
 
-                <h1 className="text-5xl md:text-6xl font-black text-on-surface tracking-tighter leading-tight mb-4">
-                  Clear Skies <span className="text-secondary italic">Await.</span>
-                </h1>
-                <p className="text-on-surface-variant text-lg max-w-xl mx-auto font-medium mb-8">
-                  Real-time aviation weather intelligence with visual workflow execution.
-                </p>
+                <Typography variant="h4" fontWeight={800}>
+                  Clear Skies Await
+                </Typography>
+                <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 680 }}>
+                  Real-time aviation weather intelligence with clearer workflows, better spacing, and Material UI structure.
+                </Typography>
 
-                {/* Quick prompts */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-3xl">
+                <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.2} useFlexGap flexWrap="wrap" sx={{ width: '100%', maxWidth: 860 }}>
                   {QUICK_PROMPTS.map(({ text, icon }) => (
-                    <button
+                    <Button
                       key={text}
                       onClick={() => sendMessage(text)}
                       disabled={!isIdle}
-                      className={cn(
-                        "glass-panel p-6 rounded-xl border border-outline-variant/10 text-left transition-all group",
-                        isIdle
-                          ? "hover:border-secondary/50 hover:shadow-lg hover:shadow-secondary/10 active:scale-[0.98] cursor-pointer"
-                          : "opacity-50 cursor-not-allowed"
-                      )}
+                      variant="outlined"
+                      color="secondary"
+                      startIcon={<MaterialIcon icon={icon} />}
+                      sx={{ flex: 1, justifyContent: 'flex-start', minWidth: { xs: '100%', md: 300 }, py: 1.2 }}
                     >
-                      <MaterialIcon icon={icon} className="text-secondary mb-4 block text-2xl group-hover:scale-110 transition-transform" />
-                      <div className="text-on-surface font-semibold mb-1">{text}</div>
-                      <div className="text-xs text-on-surface-variant">Get real-time aviation weather data</div>
-                    </button>
+                      {text}
+                    </Button>
                   ))}
-                </div>
-              </div>
+                </Stack>
+              </Stack>
             ) : (
-              <div className="max-w-6xl mx-auto w-full space-y-8">
+              <Stack spacing={2.2}>
                 {messages.length > 0 && (
-                  <div className="flex justify-center py-4">
-                    <span className="text-[10px] font-bold tracking-[0.2em] text-on-surface-variant uppercase px-4 py-1.5 rounded-full bg-surface-container-low border border-outline-variant/10">
-                      Today • {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short' })}
-                    </span>
-                  </div>
+                  <Stack direction="row" justifyContent="center">
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      label={`Today • ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short' })}`}
+                    />
+                  </Stack>
                 )}
 
                 {messages.map((msg, idx) => (
                   <MessageBubble key={idx} message={msg} />
                 ))}
 
-                {streamingMsg && (
-                  <MessageBubble message={streamingMsg} isStreaming />
-                )}
+                {streamingMsg && <MessageBubble message={streamingMsg} isStreaming />}
 
                 {isLoading && !streamingMsg && (
-                  <div className="flex items-center gap-3 pl-14">
-                    <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-surface-container-highest border border-outline-variant/15 shadow-lg">
-                      <div className="w-1.5 h-1.5 bg-secondary rounded-full animate-pulse shadow-glow-secondary"></div>
-                      <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-wider">Processing...</span>
-                    </div>
-                  </div>
+                  <Stack direction="row" spacing={1} alignItems="center" sx={{ pl: 1 }}>
+                    <CircularProgress size={16} />
+                    <Typography variant="caption" color="text.secondary">
+                      Processing...
+                    </Typography>
+                  </Stack>
                 )}
-              </div>
+              </Stack>
             )}
             <div ref={messagesEndRef} />
-          </div>
+          </Box>
 
-          {/* Input Area */}
-          <div className="w-full px-4 pb-6 pt-4 sm:px-6 md:px-10 lg:px-12 lg:pb-8">
-            <div className="max-w-5xl mx-auto">
-              <ChatInput
-                onSend={sendMessage}
-                disabled={!isIdle}
-                placeholder="Ask about aviation weather conditions..."
-              />
-            </div>
-          </div>
-        </div>
+          <Box sx={{ p: { xs: 1.5, sm: 2 }, borderTop: `1px solid ${theme.palette.divider}` }}>
+            <ChatInput
+              onSend={sendMessage}
+              disabled={!isIdle}
+              placeholder="Ask about aviation weather conditions..."
+            />
+          </Box>
+        </Paper>
 
-        {/* Workflow column */}
         {showWorkflow && messages.length > 0 && (
-          <div className="w-full xl:w-1/2 flex min-h-[320px] xl:min-h-0 flex-col bg-surface-container-lowest/30 border-t border-outline-variant/20 xl:border-t-0">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/20 sm:px-6 sm:py-4">
-              <div className="flex items-center gap-2">
-                <MaterialIcon icon="account_tree" className="text-secondary" />
-                <h2 className="text-sm font-bold text-primary">Workflow Execution</h2>
-              </div>
-            </div>
+          <Paper
+            variant="outlined"
+            sx={{
+              flex: { xs: 1, xl: 0.48 },
+              minHeight: { xs: 340, xl: 0 },
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              bgcolor: alpha(theme.palette.background.paper, 0.75),
+              backdropFilter: 'blur(10px)',
+            }}
+          >
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 2, py: 1.4, borderBottom: `1px solid ${theme.palette.divider}` }}>
+              <MaterialIcon icon="account_tree" />
+              <Typography variant="subtitle2" fontWeight={700}>
+                Workflow Execution
+              </Typography>
+            </Stack>
 
-            <div className="flex-1 overflow-hidden">
+            <Box sx={{ flex: 1, minHeight: 0 }}>
               <ReactFlow
                 nodes={nodes}
                 edges={edges}
@@ -596,13 +617,13 @@ export default function UnifiedAgentView() {
                 <Controls />
                 <MiniMap
                   nodeColor={(n) => STATUS_COLORS[n.data?.status ?? 'idle'].border}
-                  maskColor="hsl(var(--background) / 0.35)"
+                  maskColor={alpha(theme.palette.background.default, 0.45)}
                 />
               </ReactFlow>
-            </div>
-          </div>
+            </Box>
+          </Paper>
         )}
-      </div>
-    </div>
+      </Stack>
+    </Box>
   )
 }
