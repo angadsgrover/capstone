@@ -40,7 +40,6 @@ dependencies = [
 
     # Memory & RAG
     "mem0ai>=0.1.0",
-    "cognee>=0.1.38",
     "openai>=1.0.0",
     "rank-bm25>=0.2.2",
 
@@ -62,7 +61,7 @@ dependencies = [
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0"]
 
 [project.urls]
-repository = "https://github.com/your-org/aviation-agent"
+repository = "https://github.com/angadsgrover/capstone"
 
 [tool.setuptools]
 packages = ["agent"]

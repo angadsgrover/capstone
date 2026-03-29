@@ -291,7 +291,7 @@ def _generate_trace_id(session_id: str, timestamp: Optional[str] = None) -> str:
 # ── Module-level singletons ────────────────────────────────────────────────────
 
 db             = Database()
-memory_manager = DualMemoryManager()  # Unified short-term (mem0) + long-term (cognee)
+memory_manager = DualMemoryManager()  # Unified short-term + long-term memory on Mem0 Cloud
 cache          = CacheManager()       # Redis cache for frequently-asked queries
 
 # ── Runtime scaling controls ──────────────────────────────────────────────────
@@ -365,6 +365,10 @@ WORKFLOW_WORKER_POLL_SECONDS = float(os.getenv("WORKFLOW_WORKER_POLL_SECONDS", "
 SESSION_RUN_GUARD_ENABLED = os.getenv("SESSION_RUN_GUARD_ENABLED", "true").lower() == "true"
 SESSION_RUN_GUARD_TTL_SECONDS = int(os.getenv("SESSION_RUN_GUARD_TTL_SECONDS", "14400"))
 SESSION_RUN_GUARD_KEY_PREFIX = os.getenv("SESSION_RUN_GUARD_KEY_PREFIX", "agent:session_guard:")
+
+# Optional promotion of finalized chat turns into session-scoped long-term memory.
+CHAT_LONG_TERM_MEMORY_ENABLED = os.getenv("CHAT_LONG_TERM_MEMORY_ENABLED", "false").lower() == "true"
+CHAT_LONG_TERM_MEMORY_MIN_CHARS = int(os.getenv("CHAT_LONG_TERM_MEMORY_MIN_CHARS", "120"))
 
 # Deployment runtime compatibility (LangSmith-style primitives on local VM)
 DEPLOYMENT_STATE_FILE = os.getenv(
@@ -884,6 +888,38 @@ def _validate_user_input_text(value: str) -> Optional[JSONResponse]:
             status_code=400,
         )
     return None
+
+
+async def _maybe_store_chat_long_term(
+    *,
+    session_id: str,
+    user_input: str,
+    response_text: str,
+    route: str,
+) -> None:
+    """Optionally persist finalized chat turns to session long-term memory."""
+    if not CHAT_LONG_TERM_MEMORY_ENABLED:
+        return
+    if not memory_manager.long_term_available:
+        return
+
+    turn_text = f"User: {user_input}\nAssistant: {response_text}".strip()
+    if len(turn_text) < max(1, CHAT_LONG_TERM_MEMORY_MIN_CHARS):
+        return
+
+    try:
+        await memory_manager.add_session_knowledge(
+            text=turn_text,
+            session_id=session_id,
+            metadata={
+                "source": "chat_turn",
+                "route": route,
+                "session_id": session_id,
+                "stored_at": _now_iso(),
+            },
+        )
+    except Exception as e:
+        logger.warning("Failed to store chat turn in long-term memory: %s", e)
 
 
 def _deployment_proxy_enabled(request: Optional[Request] = None) -> bool:
@@ -2351,9 +2387,11 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
         global active_graph_runs, max_active_graph_runs_seen
 
         current_specialist = ""
+        detected_route = "general"
         tool_start_times: Dict[str, float] = {}
         step_counts: Dict[str, int] = {}
         streamed_chunk_counts: Dict[str, int] = {}
+        streamed_response_parts: list[str] = []
         router_start = 0.0
         node_start_times: Dict[str, float] = {}
         active_nodes: set[str] = set()
@@ -2424,6 +2462,7 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                 # ── Routing decision ─────────────────────────────────────────
                 if kind == "on_chain_start" and node in SPECIALIST_NODES:
                     current_specialist = node
+                    detected_route = node
                     step_counts[node] = 0
                     streamed_chunk_counts[node] = 0
                     router_dur = int((time.monotonic() - router_start) * 1000) if router_start else 0
@@ -2501,6 +2540,7 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                     if token:
                         parent = current_specialist or node
                         streamed_chunk_counts[parent] = streamed_chunk_counts.get(parent, 0) + 1
+                        streamed_response_parts.append(token)
                         yield f"event: chunk\ndata: {json.dumps({'chunk': token})}\n\n"
 
                 # ── Thinking/reasoning events ────────────────────────────────
@@ -2552,6 +2592,7 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                         # Some providers do not emit token chunks for every model end event.
                         # Emit a synthetic chunk so clients always receive visible answer text.
                         if streamed_chunk_counts.get(parent, 0) == 0:
+                            streamed_response_parts.append(content)
                             yield f"event: chunk\ndata: {json.dumps({'chunk': content})}\n\n"
                         step_num = step_counts.get(parent, 0) + 1
                         step_counts[parent] = step_num
@@ -2634,6 +2675,40 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                         "raw": {},
                     })
                     active_nodes.discard(node)
+
+            final_response_text = "".join(streamed_response_parts).strip()
+            if final_response_text:
+                if db.available:
+                    try:
+                        await db.save_conversation(effective_session_id, "human", input)
+                        await db.save_conversation(effective_session_id, "ai", final_response_text)
+                    except Exception as e:
+                        logger.warning("Failed to persist streamed conversation: %s", e)
+
+                if memory_manager.short_term_available:
+                    asyncio.create_task(
+                        memory_manager.add_conversation(
+                            [
+                                {"role": "user", "content": input},
+                                {"role": "assistant", "content": final_response_text},
+                            ],
+                            user_id=effective_session_id,
+                            metadata={"route": detected_route},
+                        )
+                    )
+
+                asyncio.create_task(
+                    _maybe_store_chat_long_term(
+                        session_id=effective_session_id,
+                        user_input=input,
+                        response_text=final_response_text,
+                        route=detected_route,
+                    )
+                )
+
+                asyncio.create_task(
+                    cache.set_llm_response(input, effective_session_id, detected_route, final_response_text)
+                )
 
             # Push done event for workflow visualization
             await _push(run_id, {"__done__": True})
@@ -2743,6 +2818,15 @@ async def chat_endpoint(request: Request):
                     metadata={"route": detected_route},
                 )
             )
+
+        asyncio.create_task(
+            _maybe_store_chat_long_term(
+                session_id=session_id,
+                user_input=user_input,
+                response_text=response_text,
+                route=detected_route,
+            )
+        )
 
         # Cache the response (fire-and-forget)
         asyncio.create_task(
@@ -3417,7 +3501,7 @@ async def deployment_delete_cron(request: Request, cron_id: str):
 @app.post("/api/knowledge/ingest")
 async def ingest_document(request: Request):
     """
-    Ingest a document into long-term knowledge graph (cognee).
+    Ingest a document into long-term memory (Mem0 Cloud).
 
     Body:
         {
@@ -3431,7 +3515,7 @@ async def ingest_document(request: Request):
     """
     if not memory_manager.long_term_available:
         return JSONResponse(
-            {"success": False, "error": "Long-term memory (cognee) unavailable"},
+            {"success": False, "error": "Long-term memory (mem0 cloud) unavailable"},
             status_code=503,
         )
 
@@ -3523,7 +3607,7 @@ async def ingest_documents_batch(request: Request):
     """
     if not memory_manager.long_term_available:
         return JSONResponse(
-            {"success": False, "error": "Long-term memory (cognee) unavailable"},
+            {"success": False, "error": "Long-term memory (mem0 cloud) unavailable"},
             status_code=503,
         )
 
@@ -3595,7 +3679,7 @@ async def search_knowledge(
     limit: int = 5,
 ):
     """
-    Search long-term knowledge graph.
+    Search long-term memory.
 
     Query params:
         - query: Search query (required)
@@ -3603,7 +3687,7 @@ async def search_knowledge(
         - limit: Max results (default: 5, max: 10)
 
     Returns:
-        {"results": "formatted knowledge graph results", "cached": bool}
+        {"results": "formatted long-term memory results", "cached": bool}
     """
     if not query:
         return JSONResponse(
@@ -3613,7 +3697,7 @@ async def search_knowledge(
 
     if not memory_manager.long_term_available:
         return JSONResponse(
-            {"results": "Long-term memory (cognee) unavailable"},
+            {"results": "Long-term memory (mem0 cloud) unavailable"},
         )
 
     try:
@@ -3646,7 +3730,7 @@ async def search_knowledge(
                 "cached": True,
             })
 
-        # Cache miss: query knowledge graph
+        # Cache miss: query long-term memory
         results = await memory_manager.search_long_term(
             query=query,
             dataset_name=resolved_dataset,
@@ -3681,7 +3765,7 @@ async def get_entity_info(
     session_id: str = "",
 ):
     """
-    Retrieve entity information from knowledge graph.
+    Retrieve entity information from long-term memory.
 
     Path params:
         - entity_name: Entity identifier (e.g., "EGLL", "Boeing 737")
@@ -3694,7 +3778,7 @@ async def get_entity_info(
     """
     if not memory_manager.long_term_available:
         return JSONResponse(
-            {"error": "Long-term memory (cognee) unavailable"},
+            {"error": "Long-term memory (mem0 cloud) unavailable"},
             status_code=503,
         )
 
@@ -3746,7 +3830,7 @@ async def memory_status():
     Returns:
         {
             "short_term": {"available": true, "provider": "mem0"},
-            "long_term": {"available": true, "provider": "cognee"},
+            "long_term": {"available": true, "provider": "mem0-cloud"},
             "cache": {"available": true, "provider": "redis", "hit_rate": 0.85}
         }
     """
@@ -3760,8 +3844,8 @@ async def memory_status():
         },
         "long_term": {
             "available": memory_manager.long_term_available,
-            "provider": "cognee",
-            "description": "Persistent knowledge graph (domain expertise)",
+            "provider": "mem0-cloud",
+            "description": "Persistent domain knowledge memory",
         },
         "knowledge_scopes": {
             "common_dataset": memory_manager.get_common_dataset_name(),
@@ -3779,6 +3863,153 @@ async def memory_status():
             "both_available": memory_manager.short_term_available and memory_manager.long_term_available,
         },
     })
+
+
+@app.post("/api/memory/smoke")
+async def memory_smoke_validation(request: Request):
+    """
+    Smoke validation for both short-term and long-term memory paths.
+
+    Body (optional):
+        {
+            "query": "validation query",
+            "cleanup": true,
+            "include_long_term": true
+        }
+
+    Returns detailed pass/fail diagnostics for both memory tiers.
+    """
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+
+    include_long_term = bool(payload.get("include_long_term", True))
+    cleanup = bool(payload.get("cleanup", True))
+    query = str(payload.get("query") or "memory smoke validation").strip()
+
+    token = uuid.uuid4().hex[:10]
+    smoke_session = _safe_session_id(f"smoke-{token}")
+    smoke_dataset = f"aviation_knowledge_smoke_{token}"
+
+    short_result: Dict[str, Any] = {
+        "available": memory_manager.short_term_available,
+        "stored": False,
+        "found": False,
+        "preview": "",
+        "wait_seconds": 0,
+    }
+    long_result: Dict[str, Any] = {
+        "available": memory_manager.long_term_available,
+        "stored": False,
+        "found": False,
+        "preview": "",
+        "dataset": smoke_dataset,
+        "cleanup": "skipped",
+        "wait_seconds": 0,
+    }
+
+    short_query = "favorite airport"
+    long_query = "runway incursion prevention protocol"
+    long_query_fallbacks = [
+        long_query,
+        "readback-hearback protocol",
+        "hold-short compliance",
+    ]
+
+    if short_result["available"]:
+        await memory_manager.add_conversation(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "I prefer concise responses and my favorite airport is VHHH in Hong Kong. "
+                        f"Context: {query}"
+                    ),
+                },
+                {
+                    "role": "assistant",
+                    "content": "Understood. I will keep responses concise and remember your airport preference.",
+                },
+            ],
+            user_id=smoke_session,
+            metadata={"source": "smoke_validation"},
+        )
+        short_result["stored"] = True
+
+        short_hits = ""
+        waited = 0
+        for wait_for in (2, 5, 10, 15):
+            await asyncio.sleep(wait_for)
+            waited += wait_for
+            short_hits = await memory_manager.search_short_term(short_query, user_id=smoke_session, limit=5)
+            if short_hits:
+                break
+        short_result["wait_seconds"] = waited
+        short_result["preview"] = str(short_hits)[:300]
+        short_result["found"] = bool(short_hits)
+
+    if include_long_term and long_result["available"]:
+        long_stored = await memory_manager.add_knowledge(
+            text=(
+                "Runway incursion prevention includes explicit readback-hearback protocol, "
+                "and hold-short compliance."
+            ),
+            metadata={"source": "smoke_validation", "smoke_token": token},
+            dataset_name=smoke_dataset,
+        )
+        long_result["stored"] = bool(long_stored)
+
+        long_hits = ""
+        waited = 0
+        for wait_for in (2, 5, 10, 15, 20):
+            await asyncio.sleep(wait_for)
+            waited += wait_for
+            for candidate_query in long_query_fallbacks:
+                long_hits = await memory_manager.search_long_term(
+                    query=candidate_query,
+                    dataset_name=smoke_dataset,
+                    limit=5,
+                )
+                if long_hits:
+                    break
+            if long_hits:
+                break
+        long_result["wait_seconds"] = waited
+        long_result["preview"] = str(long_hits)[:300]
+        long_result["found"] = bool(long_hits)
+
+        if cleanup:
+            cleaned = await memory_manager.reset_long_term(smoke_dataset)
+            long_result["cleanup"] = "done" if cleaned else "failed"
+
+    short_pass = short_result["available"] and short_result["stored"] and short_result["found"]
+    if include_long_term:
+        long_pass = long_result["available"] and long_result["stored"] and long_result["found"]
+    else:
+        long_pass = True
+
+    overall_pass = short_pass and long_pass
+    status_code = 200 if overall_pass else 503
+
+    return JSONResponse(
+        {
+            "overall_pass": overall_pass,
+            "short_term": short_result,
+            "long_term": long_result,
+            "chat_long_term_promotion": {
+                "enabled": CHAT_LONG_TERM_MEMORY_ENABLED,
+                "min_chars": CHAT_LONG_TERM_MEMORY_MIN_CHARS,
+            },
+            "notes": [
+                "Set CHAT_LONG_TERM_MEMORY_ENABLED=true to persist finalized chat turns into session long-term memory.",
+                "If long_term.available=false, verify MEM0_API_KEY and MEM0_LONG_TERM_ENABLED.",
+            ],
+        },
+        status_code=status_code,
+    )
 
 
 # ── Cache Management Endpoints ────────────────────────────────────────────────
@@ -3957,7 +4188,7 @@ async def clear_cache(request: Request):
 @app.post("/api/cache/invalidate-knowledge")
 async def invalidate_knowledge_cache():
     """
-    Invalidate all knowledge graph caches.
+    Invalidate all long-term memory caches.
 
     Use this after batch document ingestion to ensure fresh results.
 
@@ -3974,7 +4205,7 @@ async def invalidate_knowledge_cache():
         cleared = await cache.invalidate_knowledge_cache()
         return JSONResponse({
             "cleared": cleared,
-            "message": "Knowledge graph cache invalidated",
+            "message": "Long-term memory cache invalidated",
         })
     except Exception as e:
         logger.exception("Knowledge cache invalidation error")

@@ -20,7 +20,7 @@ Major features (student voice)
   - I added a memory system and ingestion pipeline. The code ingests documents, METAR/TAF data, and creates embeddings. This enables retrieval-augmented generation (RAG) and graph/semantic search.
 
 - Search tools and RAG
-  - I added cognee-search, graph search, and RAG helper modules so the agent can look things up in memory and combine external tool results with LLM outputs.
+  - I added long-term memory search, graph search, and RAG helper modules so the agent can look things up in memory and combine external tool results with LLM outputs.
 
 - Frontend chat and tooling UI
   - I built a frontend app with a chat UI and visualization components. The UI shows tool calls, the "thinking" state, logs, and workflow views so users can see what the agent is doing.

@@ -210,7 +210,7 @@ The `embeddings` table is the central vector index — anything (METAR, TAF, saf
 
 ### 3. mem0 for Long-Term Memory
 
-**Why mem0 over cognee here**: mem0 is a drop-in enhancement to LangGraph. Its `Memory` class replaces `MemorySaver` checkpointing for *cross-session* memory (what the user told the agent 3 sessions ago). Cognee is better suited as a *knowledge ingestion* layer (see §4).
+**Why mem0 over Mem0 Cloud here**: mem0 is a drop-in enhancement to LangGraph. Its `Memory` class replaces `MemorySaver` checkpointing for *cross-session* memory (what the user told the agent 3 sessions ago). Mem0 Cloud is better suited as a *knowledge ingestion* layer (see §4).
 
 #### Integration in `orchestrator.py`
 
@@ -292,14 +292,14 @@ $$) AS (icao agtype, events agtype);
 
 **Use Neo4j** (the `--profile graph` service) when you need: graph ML algorithms (community detection, path finding over thousands of nodes), the Bloom visual explorer, or will build a dedicated reasoning layer over aviation ontologies. The switch is transparent to the agent — just change the Cypher driver endpoint.
 
-**cognee** can sit on top of either graph backend and auto-ingest content (documents, conversations) into the graph as an async background task:
+**Mem0 Cloud** can sit on top of either graph backend and auto-ingest content (documents, conversations) into the graph as an async background task:
 ```python
-import cognee
-cognee.config.set_llm_provider("openai")
-cognee.config.set_graph_db_provider("neo4j")   # or "kuzu" for embedded
-await cognee.add(safety_narrative_text, dataset_name="safety_events")
-await cognee.cognify()   # extracts entities + relations → graph
-# Now queryable as: await cognee.search("cargo VHHH runway excursion", type="insights")
+import Mem0 Cloud
+Mem0 Cloud.config.set_llm_provider("openai")
+Mem0 Cloud.config.set_graph_db_provider("neo4j")   # or "kuzu" for embedded
+await Mem0 Cloud.add(safety_narrative_text, dataset_name="safety_events")
+await Mem0 Cloud.cognify()   # extracts entities + relations → graph
+# Now queryable as: await Mem0 Cloud.search("cargo VHHH runway excursion", type="insights")
 ```
 
 **Recommended stack combining everything:**
@@ -311,7 +311,7 @@ PostgreSQL (pgvector + Apache AGE)
   └── knowledge graph       → airports, routes, events (AGE / Cypher)
 
 mem0                        → long-term user memory (sits on pgvector)
-cognee (optional)           → auto-build knowledge graph from documents
+Mem0 Cloud (optional)           → auto-build knowledge graph from documents
 LangGraph MemorySaver       → short-term within-session (in-memory, unchanged)
 Neo4j (optional profile)    → only if AGE proves limiting
 ```
@@ -379,7 +379,7 @@ This becomes the `5th specialist tool` available to aviation_agent and general_a
 | **P4** | Historical data ingestion | `agent/ingestion/*.py` |
 | **P5** | RAG tool + embedding pipeline | `agent/tools/rag_search.py`, `agent/ingestion/embedder.py` |
 | **P6** | Apache AGE knowledge graph | `infra/init.sql`, `agent/tools/graph_search.py` |
-| **P7** | cognee / Neo4j (optional) | `agent/knowledge/cognee_ingestor.py` |
+| **P7** | Mem0 Cloud / Neo4j (optional) | `agent/knowledge/mem0_ingestor.py` |
 
 ---
 
@@ -393,4 +393,4 @@ This becomes the `5th specialist tool` available to aviation_agent and general_a
 
 4. **Apache AGE vs Neo4j**: AGE is zero-extra-infra but less mature. Use `--profile graph` to defer the Neo4j decision until the graph queries get complex enough to justify another service.
 
-5. **cognee vs manual ingestion**: cognee auto-extracts entities/relations from raw text but adds a complex dependency. For MVP, manual ingestion (structured SQL + pgvector) is more predictable. cognee is a good Phase 7 upgrade.
+5. **Mem0 Cloud vs manual ingestion**: Mem0 Cloud auto-extracts entities/relations from raw text but adds a complex dependency. For MVP, manual ingestion (structured SQL + pgvector) is more predictable. Mem0 Cloud is a good Phase 7 upgrade.

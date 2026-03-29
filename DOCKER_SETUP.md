@@ -7,7 +7,7 @@ This guide is the complete Docker-based setup for this project, including:
 - Moving data to a larger drive
 - Backup and restore
 
-If you want the full stack (LangSmith + cognee + Neo4j + Apache AGE), jump to section 2.4.
+If you want the full stack (LangSmith + Mem0 Cloud + Neo4j + Apache AGE), jump to section 2.4.
 
 ---
 
@@ -106,7 +106,7 @@ docker compose --profile dev up -d
 
 Then open `http://localhost:8080`.
 
-### 2.4 Full Stack Setup (LangSmith + cognee + Neo4j + Apache AGE)
+### 2.4 Full Stack Setup (LangSmith + Mem0 Cloud + Neo4j + Apache AGE)
 
 Use this when you want all optional capabilities enabled.
 
@@ -126,7 +126,7 @@ MODEL_CHOICE=qwen/qwen3-8b
 POSTGRES_PASSWORD=change_to_a_strong_password
 
 # Enable long-term memory
-COGNEE_ENABLED=true
+MEM0_LONG_TERM_ENABLED=true
 
 # Neo4j graph store (Docker-internal host)
 NEO4J_URI=bolt://neo4j:7687
@@ -175,7 +175,7 @@ Expected:
 Notes:
 
 - LangSmith in this stack is configured as an external service via API key in `agent`; this compose file does not run a LangSmith server container.
-- If `NEO4J_PASSWORD` is unset, cognee still runs with vector storage but graph-store enhancement is disabled.
+- If `NEO4J_PASSWORD` is unset, Mem0 memory still works and graph-store enhancement is disabled.
 
 ---
 

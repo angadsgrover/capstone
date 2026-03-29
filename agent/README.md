@@ -8,7 +8,7 @@ This service is the backend orchestration layer for the Aviation Intelligence Pl
 - Router categories: `aviation_weather`, `hk_weather`, `aircraft`, `planning`, `general`
 - Specialist execution: dedicated `create_react_agent` instances with focused tools
 - Planning mode (Phase 15): plan-and-execute graph with explicit plan metadata and execution traces
-- Memory: MemorySaver checkpointer + mem0 (short-term) + cognee (long-term)
+- Memory: MemorySaver checkpointer + Mem0 Cloud (short-term + long-term)
 - Retrieval (Phase 9): hybrid RAG (`pgvector` + BM25 reranking)
 - Caching: Redis for hot query paths
 
@@ -84,6 +84,7 @@ Deployment runtime (LangSmith-style primitives):
 Knowledge and memory:
 
 - `GET /api/memory/status`
+- `POST /api/memory/smoke`
 - `POST /api/knowledge/ingest`
 - `POST /api/knowledge/ingest-batch`
 - `GET /api/knowledge/search`
@@ -161,7 +162,7 @@ Environment variables:
 - `orchestrator.py`: router and specialist graph wiring
 - `planning.py`: plan-and-execute graph implementation
 - `tools/rag_search.py`: Phase 9 hybrid retrieval
-- `memory.py`: mem0 + cognee integration
+- `memory.py`: Mem0 Cloud short-term + long-term integration
 - `cache.py`: Redis cache manager
 - `db.py`: PostgreSQL/pgvector operations
 

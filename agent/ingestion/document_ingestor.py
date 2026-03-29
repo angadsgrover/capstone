@@ -1,5 +1,5 @@
 """
-Document ingestion for long-term knowledge graph (cognee).
+Document ingestion for long-term memory (Mem0 Cloud).
 
 Supports ingestion of:
 - Safety documents (incident reports, NTSB reports, ATSB bulletins)
@@ -10,7 +10,7 @@ Supports ingestion of:
 Features:
 - Batch ingestion from directory
 - Metadata extraction (date, source, type)
-- Automatic entity/relationship extraction via cognee
+- Automatic indexing and retrieval via Mem0 Cloud
 - Progress tracking and error handling
 
 Usage:
@@ -62,7 +62,7 @@ SOURCE_TYPE_MAPPING = {
 
 class DocumentIngestor:
     """
-    Ingest documents into long-term knowledge graph (cognee).
+    Ingest documents into long-term memory (Mem0 Cloud).
 
     Best Practices:
     1. **Metadata**: Always include source, date, type for better retrieval
@@ -133,7 +133,7 @@ class DocumentIngestor:
             # Extract/enhance metadata
             doc_metadata = self._extract_metadata(path, metadata)
 
-            # Ingest into cognee
+            # Ingest into long-term memory
             success = await self.memory_manager.add_knowledge(
                 text=content,
                 metadata=doc_metadata,

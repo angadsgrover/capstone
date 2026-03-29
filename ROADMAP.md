@@ -14,7 +14,7 @@ This document outlines the strategic roadmap for enhancing the Aviation Intellig
 - [x] **Phase 4**: METAR/TAF ingestion pipeline
 - [x] **Phase 5**: Apache AGE graph database (optional)
 - [x] **Phase 6**: OpenRouter embeddings support
-- [x]  **Phase 7**: Dual-memory system (mem0 + cognee)
+- [x]  **Phase 7**: Dual-memory system (Mem0 Cloud short-term + long-term)
 - [x] **Phase 8**: Redis caching + React Native mobile guide
 - [x] **Phase 9**: Hybrid BM25 + vector RAG reranking (exact-match uplift with bounded over-fetch)
 - [x] **Phase 13**: Advanced visualizations (airport map data, trends, flight paths, safety heatmap)

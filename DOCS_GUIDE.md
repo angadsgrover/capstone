@@ -92,11 +92,11 @@ This guide explains the purpose and audience of each documentation file in the p
 ## Feature-Specific Documentation
 
 ### 🧠 [MEMORY_ARCHITECTURE.md](./MEMORY_ARCHITECTURE.md)
-**Purpose**: Dual-memory system architecture (mem0 + cognee)
+**Purpose**: Dual-memory system architecture (Mem0 Cloud short-term + long-term)
 **Audience**: Developers working on memory/RAG features
 **Content**:
 - Short-term memory (mem0) architecture
-- Long-term memory (cognee) architecture
+- Long-term memory (Mem0 Cloud) architecture
 - Knowledge graph design
 - Memory integration with LangGraph
 - Document ingestion pipeline
@@ -194,7 +194,7 @@ This guide explains the purpose and audience of each documentation file in the p
   - LangChain/LangGraph: `langgraph>=1.0.0`, `langchain-openai>=1.0.0`
   - MCP Protocol: `mcp>=1.5.0`, `fastmcp>=2.10.2`
   - Database: `asyncpg>=0.29.0`, `redis>=5.0.0`
-  - Memory/RAG: `mem0ai>=0.1.0`, `cognee>=0.1.38`, `rank-bm25>=0.2.2`
+  - Memory/RAG: `mem0ai>=0.1.0`, `rank-bm25>=0.2.2`
   - Web: `fastapi>=0.128`, `uvicorn>=0.30.0`
 
 #### MCP Servers

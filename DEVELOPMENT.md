@@ -250,11 +250,11 @@ MODEL_CHOICE=qwen/qwen3-8b
 # Local PostgreSQL DSN (update user/password/port to your local setup)
 POSTGRES_DSN=postgresql://capstone:<password>@localhost:5432/capstone
 
-# Optional long-term graph memory
-COGNEE_ENABLED=true
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=<neo4j-password>
+# Mem0 Cloud memory
+MEM0_API_KEY=m0-...
+MEM0_LONG_TERM_ENABLED=true
+MEM0_LONG_TERM_USER_ID=aviation_knowledge_base
+MEM0_SHORT_TERM_APP_ID=chat_sessions
 ```
 
 ### 6. Start services without Docker

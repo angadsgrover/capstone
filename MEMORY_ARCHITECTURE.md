@@ -5,7 +5,7 @@
 The aviation assistant implements a sophisticated **dual-memory system** that combines:
 
 1. **Short-term Memory (mem0)**: Recent conversational context, user preferences, session-specific facts
-2. **Long-term Memory (cognee)**: Persistent knowledge graphs, domain expertise, safety documents
+2. **Long-term Memory (Mem0 Cloud)**: Persistent knowledge graphs, domain expertise, safety documents
 
 This architecture mirrors human cognitive systems: working memory for immediate context and long-term storage for accumulated knowledge.
 
@@ -19,7 +19,7 @@ This architecture mirrors human cognitive systems: working memory for immediate 
       ▼                             ▼
 ┌─────────────────┐           ┌─────────────────┐
 │ Short-term      │           │ Long-term       │
-│ Memory (mem0)   │           │ Memory (cognee) │
+│ Memory (mem0)   │           │ Memory (Mem0 Cloud) │
 ├─────────────────┤           ├─────────────────┤
 │ • Last N turns  │           │ • Knowledge     │
 │ • User prefs    │           │   graphs        │
@@ -88,7 +88,7 @@ EMBED_MODEL=openai/text-embedding-3-small  # for semantic search
 
 ---
 
-### 2. Long-term Memory (cognee)
+### 2. Long-term Memory (Mem0 Cloud)
 
 **Purpose**: Build and query persistent knowledge graphs from domain documents.
 
@@ -99,7 +99,7 @@ EMBED_MODEL=openai/text-embedding-3-small  # for semantic search
 - Entity relationships (airports, aircraft, organizations, concepts)
 
 **Implementation**:
-- **Library**: [cognee](https://github.com/topoteretes/cognee)
+- **Library**: [Mem0 Cloud](https://github.com/topoteretes/Mem0 Cloud)
 - **Storage**:
   - PostgreSQL + pgvector (embeddings)
   - Neo4j (optional, enhances graph queries)
@@ -127,7 +127,7 @@ EMBED_MODEL=openai/text-embedding-3-small  # for semantic search
 ```bash
 # .env
 POSTGRES_DSN=postgresql://capstone:secret@localhost:5432/capstone
-COGNEE_ENABLED=true
+MEM0_LONG_TERM_ENABLED=true
 
 # Optional: Neo4j for enhanced graph queries
 NEO4J_URI=bolt://localhost:7687
@@ -182,7 +182,7 @@ messages = [SystemMessage(content=system_prompt)] + conversation_history
 **Specialists can explicitly query long-term memory** via the `knowledge_graph_search` tool:
 
 ```python
-# Tool definition (tools/cognee_search.py)
+# Tool definition (tools/mem0_search.py)
 @tool
 async def knowledge_graph_search(query: str, dataset: str = "aviation_knowledge") -> str:
     """
@@ -312,7 +312,7 @@ Response:
   },
   "long_term": {
     "available": true,
-    "provider": "cognee",
+    "provider": "mem0-cloud",
     "description": "Persistent knowledge graph"
   },
   "dual_memory": {
@@ -374,7 +374,7 @@ Response:
 - **Capacity**: Unlimited (PostgreSQL table)
 - **Retention**: Configurable per-session (default: ephemeral)
 
-### Long-term Memory (cognee)
+### Long-term Memory (Mem0 Cloud)
 - **Latency**: ~100-300ms per search (graph traversal + embeddings)
 - **Capacity**: Scales with PostgreSQL + optional Neo4j
 - **Retention**: Persistent (never expires)
@@ -400,14 +400,14 @@ curl http://localhost:8000/api/memory/status | jq .short_term
 
 ### Long-term memory not working
 ```bash
-# Check cognee status
+# Check Mem0 Cloud status
 curl http://localhost:8000/api/memory/status | jq .long_term
 
 # Check if documents ingested
 curl "http://localhost:8000/api/knowledge/search?query=test&limit=1"
 
 # Check environment
-echo $COGNEE_ENABLED  # should be "true"
+echo $MEM0_LONG_TERM_ENABLED  # should be "true"
 ```
 
 ### Knowledge graph empty
@@ -429,7 +429,7 @@ curl "http://localhost:8000/api/knowledge/entity/EGLL"
 2. **Re-ranker**: BM25 keyword + semantic rank for RAG results
 3. **Memory pruning**: Auto-delete stale short-term memories
 4. **Graph visualization**: UI for exploring knowledge graph
-5. **Multi-modal**: Ingest images (runway diagrams, charts) via cognee
+5. **Multi-modal**: Ingest images (runway diagrams, charts) via Mem0 Cloud
 6. **Hybrid search**: Combine short-term + long-term in single query
 7. **Memory consolidation**: Promote important short-term facts to long-term
 
@@ -438,7 +438,6 @@ curl "http://localhost:8000/api/knowledge/entity/EGLL"
 ## References
 
 - [mem0 Documentation](https://docs.mem0.ai/)
-- [cognee Documentation](https://cognee.ai/docs)
 - [LangGraph Memory](https://langchain-ai.github.io/langgraph/how-tos/memory/manage-conversation-history/)
 - [pgvector Guide](https://github.com/pgvector/pgvector)
 - [Neo4j + LangChain](https://python.langchain.com/docs/integrations/graphs/neo4j_cypher)

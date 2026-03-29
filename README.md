@@ -7,10 +7,10 @@ A full-stack multi-agent AI system for aviation weather, aircraft tracking, and 
 - **Intelligent Routing**: Router LLM classifies user queries → dispatches to specialized agents
 - **4 Specialist Agents**: Aviation weather | HK climate | Aircraft tracking | General Q&A
 - **Live Streaming**: Token-by-token SSE streaming + rich workflow event tracing
-- **Dual Memory System**: Short-term (mem0) + Long-term (cognee) for context + knowledge graphs
+- **Dual Memory System**: Short-term + long-term memory on Mem0 Cloud for context + persistent knowledge
 - **High-Performance Caching**: Redis layer for 2-5x faster responses (40-60% hit rate)
 - **Historical RAG**: Semantic search over METAR/TAF archives + safety benchmarks
-- **Knowledge Graph**: Apache AGE (optional) + cognee for entity relationships + domain expertise
+- **Knowledge Layer**: Apache AGE (optional graph queries) + Mem0 Cloud long-term memory for domain expertise
 - **Mobile-Ready**: React Native guide for iOS/Android apps (portable shared layer)
 - **Multi-Provider LLM**: OpenRouter (default), OpenAI, Groq, Ollama, etc.
 
@@ -119,14 +119,14 @@ The runner lives at `agent/evaluation/runner.py` and seeds/uses the `aviation-ag
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │ LangGraph Orchestrator                               │  │
 │  │  router → 4 specialist create_react_agent           │  │
-│  │  + dual memory (mem0 + cognee)                       │  │
+│  │  + dual memory (Mem0 Cloud)                          │  │
 │  │  (aviation_weather, hk_weather, aircraft, general)   │  │
 │  └──────────────────────────────────────────────────────┘  │
 │  - Endpoints: /api/agent, /api/agent/stream,               │
 │              /api/knowledge/*, /api/memory/status          │
 │  - Conversation persisted to PostgreSQL                    │
-│  - Short-term memory: mem0 + pgvector                      │
-│  - Long-term memory: cognee + pgvector + Neo4j (optional)  │
+│  - Short-term memory: Mem0 Cloud session memory            │
+│  - Long-term memory: Mem0 Cloud knowledge datasets         │
 └──────────────┬──────────────────┬──────────────┬───────────┘
                │                  │              │
     ┌──────────▼─┐      ┌─────────▼──┐  ┌──────▼────────┐
@@ -151,14 +151,14 @@ The runner lives at `agent/evaluation/runner.py` and seeds/uses the `aviation-ag
 **Memory Architecture**:
 - **MemorySaver** (checkpointer): within-session conversation history (LangGraph native)
 - **Short-term Memory (mem0)**: Recent conversational context, user preferences, session facts (pgvector)
-- **Long-term Memory (cognee)**: Persistent knowledge graphs from safety documents, regulations, domain expertise (pgvector + optional Neo4j)
+- **Long-term Memory (Mem0 Cloud)**: Persistent knowledge from safety documents, regulations, and domain expertise
 - **Message trimming**: specialists see last 20 messages (configurable; full history in DB)
 - **Tool truncation**: 8000-char limit per tool output (configurable)
 
 **How Memory Works**:
 1. **Automatic Injection**: Every specialist query gets relevant short-term + long-term context in system prompt
-2. **Explicit Tool**: `knowledge_graph_search` tool lets agents query cognee for deep domain knowledge
-3. **Separation of Concerns**: mem0 for ephemeral session context, cognee for persistent expertise
+2. **Explicit Tool**: `knowledge_graph_search` tool lets agents query long-term Mem0 memory for deep domain knowledge
+3. **Separation of Concerns**: short-term session context and long-term persistent expertise are isolated by scope
 
 See [MEMORY_ARCHITECTURE.md](./MEMORY_ARCHITECTURE.md) for full details.
 
@@ -287,7 +287,7 @@ When JWT verification is enabled and fallback is disabled, requests with invalid
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/memory/status` | Check short-term/long-term memory availability |
-| POST | `/api/knowledge/ingest` | Ingest single document into cognee knowledge graph |
+| POST | `/api/knowledge/ingest` | Ingest single document into long-term memory |
 | POST | `/api/knowledge/ingest-batch` | Batch ingest multiple documents |
 | GET | `/api/knowledge/search` | Search long-term knowledge graph (query param) |
 | GET | `/api/knowledge/entity/{name}` | Retrieve specific entity from knowledge graph |
@@ -360,10 +360,11 @@ EMBED_API_KEY=sk-...
 EMBED_BASE_URL=https://api.openai.com/v1
 EMBED_MODEL=openai/text-embedding-3-small  # or -large, cohere, mistral, nomic
 
-# Memory System (Dual: mem0 + cognee)
-COGNEE_ENABLED=true  # enable long-term knowledge graph (default: true)
+# Memory System (Mem0 Cloud)
+MEM0_API_KEY=m0-...              # required
+MEM0_LONG_TERM_ENABLED=true      # enable long-term memory (default: true)
 
-# Neo4j (enhances cognee graph queries + AGE graph support)
+# Optional graph stack for AGE/graph queries
 NEO4J_PASSWORD=another_strong_password
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
@@ -546,7 +547,7 @@ ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
 
 ## Future Enhancements
 
-1. **cognee**: Auto-build knowledge graphs from safety documents (Phase 7)
+1. **Knowledge ingestion**: Expand long-term memory ingestion pipelines for safety documents
 2. **Re-ranker**: BM25 keyword + semantic rank for RAG results
 3. **Time-series**: Store/forecast wind/temp trends per airport
 4. **Mobile**: React Native port of components (type layer already portable)

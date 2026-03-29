@@ -160,7 +160,7 @@ async def search_knowledge(query: str, dataset: str = "aviation_knowledge"):
             "cached": True,
         })
 
-    # Cache miss: query cognee
+    # Cache miss: query long-term Mem0 memory
     results = await memory_manager.search_long_term(query, dataset)
 
     # Cache (fire-and-forget)
@@ -254,7 +254,7 @@ GET /api/memory/status
 Response:
 {
   "short_term": { "available": true, "provider": "mem0" },
-  "long_term": { "available": true, "provider": "cognee" },
+  "long_term": { "available": true, "provider": "mem0-cloud" },
   "cache": {
     "available": true,
     "provider": "redis",

@@ -70,7 +70,10 @@ services:
       # Optional: separate embedding provider (default falls back to BASE_URL/LLM_API_KEY)
       EMBED_API_KEY: ${EMBED_API_KEY:-}
       EMBED_BASE_URL: ${EMBED_BASE_URL:-}
-      COGNEE_ENABLED: ${COGNEE_ENABLED:-true}
+      MEM0_API_KEY: ${MEM0_API_KEY:-${MEM0_KEY:-}}
+      MEM0_LONG_TERM_ENABLED: ${MEM0_LONG_TERM_ENABLED:-true}
+      MEM0_LONG_TERM_USER_ID: ${MEM0_LONG_TERM_USER_ID:-aviation_knowledge_base}
+      MEM0_SHORT_TERM_APP_ID: ${MEM0_SHORT_TERM_APP_ID:-chat_sessions}
       NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-}
@@ -140,7 +143,10 @@ services:
       BASE_URL: ${BASE_URL}
       EMBED_API_KEY: ${EMBED_API_KEY:-}
       EMBED_BASE_URL: ${EMBED_BASE_URL:-}
-      COGNEE_ENABLED: ${COGNEE_ENABLED:-true}
+      MEM0_API_KEY: ${MEM0_API_KEY:-${MEM0_KEY:-}}
+      MEM0_LONG_TERM_ENABLED: ${MEM0_LONG_TERM_ENABLED:-true}
+      MEM0_LONG_TERM_USER_ID: ${MEM0_LONG_TERM_USER_ID:-aviation_knowledge_base}
+      MEM0_SHORT_TERM_APP_ID: ${MEM0_SHORT_TERM_APP_ID:-chat_sessions}
       NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-}

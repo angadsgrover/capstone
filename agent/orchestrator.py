@@ -401,16 +401,18 @@ def _build_graph(
         except Exception as e:
             logger.debug("Graph search tool unavailable: %s", e)
 
-    # ── Optional cognee knowledge graph tool (long-term memory) ───────────────
-    cognee_tool = None
+    # ── Optional Mem0 long-term knowledge tool ────────────────────────────────
+    mem0_long_term_tool = None
+    mem0_entity_tool = None
     if memory_manager is not None and hasattr(memory_manager, "long_term_available"):
         if memory_manager.long_term_available:
             try:
-                from tools.cognee_search import make_cognee_search_tool
-                cognee_tool = make_cognee_search_tool(memory_manager)
-                logger.info("cognee knowledge graph tool enabled.")
+                from tools.mem0_search import make_mem0_entity_tool, make_mem0_search_tool
+                mem0_long_term_tool = make_mem0_search_tool(memory_manager)
+                mem0_entity_tool = make_mem0_entity_tool(memory_manager)
+                logger.info("Mem0 long-term knowledge tool enabled.")
             except Exception as e:
-                logger.warning("cognee tool unavailable: %s", e)
+                logger.warning("Mem0 long-term tool unavailable: %s", e)
 
     def _extra_tools() -> List[StructuredTool]:
         extras = []
@@ -418,8 +420,10 @@ def _build_graph(
             extras.append(rag_tool)
         if graph_tool:
             extras.append(graph_tool)
-        if cognee_tool:
-            extras.append(cognee_tool)
+        if mem0_long_term_tool:
+            extras.append(mem0_long_term_tool)
+        if mem0_entity_tool:
+            extras.append(mem0_entity_tool)
         return extras
 
     # ── Self-healing wrapper (optional) ──────────────────────────────────────
@@ -586,7 +590,7 @@ def _build_graph(
                     # Assistant prompt is prepended so domain prompt still enforces hard constraints.
                     system_content = f"{assistant_prompt}\n\n{base_prompt}"
             if memory_manager is not None:
-                # Use search_combined for both short-term (mem0) and long-term (cognee) context
+                # Use search_combined for both short-term and long-term memory context.
                 if hasattr(memory_manager, "search_combined"):
                     # DualMemoryManager: get both memory types
                     memories = await memory_manager.search_combined(

@@ -24,7 +24,6 @@ asyncpg>=0.29.0
 
 # Memory & RAG
 mem0ai>=0.1.0
-cognee>=0.1.38
 openai>=1.0.0
 rank-bm25>=0.2.2
 
