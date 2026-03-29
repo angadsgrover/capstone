@@ -5,11 +5,15 @@ import asyncio
 import json
 import logging
 import os
+import pathlib
 import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlparse
+
+import httpx
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
@@ -21,6 +25,32 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 
 try:
+    from langsmith import traceable
+    from langsmith.run_helpers import get_current_run_tree
+except Exception:  # pragma: no cover - safe no-op fallback when langsmith unavailable
+    def traceable(*args, **kwargs):
+        if args and callable(args[0]) and len(args) == 1 and not kwargs:
+            return args[0]
+
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
+    def get_current_run_tree():
+        return None
+
+try:
+    from langsmith.middleware import TracingMiddleware
+except Exception:  # pragma: no cover - optional runtime dependency
+    TracingMiddleware = None
+
+try:
+    from langsmith import tracing_context as langsmith_tracing_context
+except Exception:  # pragma: no cover - optional runtime dependency
+    langsmith_tracing_context = None
+
+try:
     import jwt
     from jwt import InvalidTokenError, PyJWKClient
 except Exception:  # pragma: no cover - optional dependency handling
@@ -29,99 +59,220 @@ except Exception:  # pragma: no cover - optional dependency handling
     PyJWKClient = None
 
 from db import Database
+from deployment_runtime import DeploymentRuntimeStore
 from memory import DualMemoryManager  # Upgraded from MemoryManager
 from cache import CacheManager
 from orchestrator import init_graph
 import mcp_client as mcp_module
 
+try:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+except Exception:  # pragma: no cover - optional dependency handling
+    AsyncIOScheduler = None
+    CronTrigger = None
+
 logger = logging.getLogger(__name__)
 
-# ── Langfuse (optional observability) ─────────────────────────────────────────
+# ── LangSmith (optional observability) ────────────────────────────────────────
 
-_langfuse_enabled = False
+_langsmith_enabled = False
+_langsmith_client = None
+_langsmith_status_reason = "not_initialized"
+_langsmith_last_error = ""
+_langsmith_tracing_middleware_enabled = False
 
-def _init_langfuse() -> bool:
-    """Initialize Langfuse SDK v3+ singleton if credentials are available."""
-    global _langfuse_enabled
 
-    public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
-    secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+def _parse_bool_env(value: Optional[str]) -> Optional[bool]:
+    """Parse an environment boolean, returning None when unset/invalid."""
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    return None
 
-    if not public_key or not secret_key:
-        logger.info("Langfuse disabled: LANGFUSE_PUBLIC_KEY or LANGFUSE_SECRET_KEY not set")
+
+def _langsmith_endpoint() -> str:
+    return os.getenv("LANGSMITH_ENDPOINT") or os.getenv("LANGCHAIN_ENDPOINT") or "https://api.smith.langchain.com"
+
+
+def _langsmith_project() -> str:
+    return os.getenv("LANGSMITH_PROJECT") or os.getenv("LANGCHAIN_PROJECT") or "default"
+
+
+def _langsmith_ui_base() -> str:
+    explicit = (os.getenv("LANGSMITH_UI_URL") or "").strip().rstrip("/")
+    if explicit:
+        return explicit
+
+    endpoint = _langsmith_endpoint().strip()
+    parsed = urlparse(endpoint)
+    scheme = parsed.scheme or "https"
+    host = parsed.netloc or "api.smith.langchain.com"
+    path = (parsed.path or "").rstrip("/")
+
+    if host == "api.smith.langchain.com":
+        host = "smith.langchain.com"
+    elif host == "eu.api.smith.langchain.com":
+        host = "eu.smith.langchain.com"
+    elif host.startswith("api."):
+        host = host[4:]
+
+    if path.endswith("/api"):
+        path = path[:-4]
+
+    base = f"{scheme}://{host}{path}"
+    return base.rstrip("/")
+
+
+def _langsmith_dashboard_url() -> str:
+    return f"{_langsmith_ui_base()}/monitor"
+
+
+def _langsmith_trace_context() -> Dict[str, Any]:
+    run_tree = get_current_run_tree()
+    if not run_tree:
+        return {}
+
+    try:
+        run_id = str(getattr(run_tree, "id", "") or "")
+        trace_id = str(getattr(run_tree, "trace_id", "") or "")
+        if not run_id and not trace_id:
+            return {}
+        return {
+            "root_run_id": run_id,
+            "trace_id": trace_id,
+            "project": _langsmith_project(),
+            "ui_url": _langsmith_ui_base(),
+            "dashboard_url": _langsmith_dashboard_url(),
+        }
+    except Exception:
+        return {}
+
+def _init_langsmith() -> bool:
+    """Initialize LangSmith tracing if credentials are available.
+    
+    LangSmith has native integration with LangChain/LangGraph - tracing is 
+    automatic when LANGSMITH_TRACING=true and LANGSMITH_API_KEY is set.
+    We just need to verify the configuration and create a client for feedback.
+    """
+    global _langsmith_enabled, _langsmith_client, _langsmith_status_reason, _langsmith_last_error
+
+    api_key = os.getenv("LANGSMITH_API_KEY")
+    tracing_preference = _parse_bool_env(os.getenv("LANGSMITH_TRACING"))
+
+    # Also support legacy LANGCHAIN_TRACING_V2 env var.
+    if tracing_preference is None:
+        tracing_preference = _parse_bool_env(os.getenv("LANGCHAIN_TRACING_V2"))
+
+    # Default to enabled tracing unless explicitly disabled.
+    tracing_enabled = True if tracing_preference is None else tracing_preference
+    
+    # Support LANGCHAIN_API_KEY as fallback
+    if not api_key:
+        api_key = os.getenv("LANGCHAIN_API_KEY")
+
+    if not api_key:
+        _langsmith_status_reason = "missing_api_key"
+        _langsmith_last_error = ""
+        logger.info("LangSmith disabled: LANGSMITH_API_KEY not set")
+        return False
+
+    if not tracing_enabled:
+        _langsmith_status_reason = "disabled_by_env"
+        _langsmith_last_error = ""
+        logger.info("LangSmith disabled: tracing explicitly disabled by env")
         return False
 
     try:
-        from langfuse import Langfuse
-
-        # Support both LANGFUSE_HOST and LANGFUSE_BASE_URL for flexibility
-        langfuse_host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com"
+        from langsmith import Client
         
-        # Initialize the singleton with explicit keys
-        # This sets up the global client that get_client() will return
-        Langfuse(
-            public_key=public_key,
-            secret_key=secret_key,
-            host=langfuse_host,
-            enabled=True,
+        endpoint = _langsmith_endpoint()
+        project = _langsmith_project()
+        
+        # Ensure env vars are set for automatic LangChain/LangGraph tracing
+        os.environ["LANGSMITH_TRACING"] = "true"
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGSMITH_API_KEY"] = api_key
+        os.environ["LANGCHAIN_API_KEY"] = api_key
+        os.environ["LANGCHAIN_PROJECT"] = project
+        if endpoint != "https://api.smith.langchain.com":
+            os.environ["LANGSMITH_ENDPOINT"] = endpoint
+            os.environ["LANGCHAIN_ENDPOINT"] = endpoint
+        
+        # Create client for feedback operations
+        _langsmith_client = Client(
+            api_key=api_key,
+            api_url=endpoint,
         )
-        _langfuse_enabled = True
-        logger.info("Langfuse initialized successfully (host: %s)", langfuse_host)
+        
+        _langsmith_enabled = True
+        _langsmith_status_reason = "enabled"
+        _langsmith_last_error = ""
+        logger.info("LangSmith initialized successfully (endpoint: %s, project: %s)", endpoint, project)
         return True
     except Exception as e:
-        logger.warning("Langfuse initialization failed: %s", e)
+        _langsmith_status_reason = "init_error"
+        _langsmith_last_error = str(e)
+        logger.warning("LangSmith initialization failed: %s", e)
         return False
 
 
-def _shutdown_langfuse() -> None:
-    """Flush and shutdown Langfuse client gracefully."""
-    if not _langfuse_enabled:
+def _shutdown_langsmith() -> None:
+    """Gracefully shutdown LangSmith (flush any pending traces)."""
+    global _langsmith_client
+    if not _langsmith_enabled:
         return
     try:
-        from langfuse import get_client
-        client = get_client()
-        client.flush()
-        client.shutdown()
-        logger.info("Langfuse shutdown completed")
+        # LangSmith SDK handles flushing automatically, but we can ensure cleanup
+        _langsmith_client = None
+        logger.info("LangSmith shutdown completed")
     except Exception as e:
-        logger.warning("Langfuse shutdown error: %s", e)
+        logger.warning("LangSmith shutdown error: %s", e)
 
 
-def _score_trace(
-    trace_id: str,
-    name: str,
-    value: float,
-    data_type: str = "NUMERIC",
+def _create_feedback(
+    run_id: str,
+    key: str,
+    score: float,
     comment: str = "",
+    trace_id: Optional[str] = None,
 ) -> bool:
     """
-    Add a score to a Langfuse trace.
+    Add feedback to a LangSmith run/trace.
 
     Args:
-        trace_id: The Langfuse trace ID to score
-        name: Score name (e.g., "user-feedback", "relevance")
-        value: Numeric score value
-        data_type: "NUMERIC" or "CATEGORICAL"
-        comment: Optional comment explaining the score
+        run_id: The LangSmith run ID to add feedback to
+        key: Feedback key (e.g., "user-rating", "relevance", "helpfulness")
+        score: Numeric score value (typically 0-1, but 1-5 is also supported)
+        comment: Optional comment explaining the feedback
+        trace_id: Optional trace ID for batched ingestion (recommended)
 
     Returns:
-        True if score was created, False otherwise
+        True if feedback was created, False otherwise
     """
-    if not _langfuse_enabled:
+    if not _langsmith_enabled or not _langsmith_client:
         return False
     try:
-        from langfuse import get_client
-        client = get_client()
-        client.create_score(
-            trace_id=trace_id,
-            name=name,
-            value=value,
-            data_type=data_type,
+        # Normalize score to 0-1 range if it's in 1-5 range
+        normalized_score = score / 5.0 if score > 1 else score
+        
+        _langsmith_client.create_feedback(
+            run_id=run_id,
+            key=key,
+            score=normalized_score,
             comment=comment or None,
+            # trace_id helps with batched ingestion
+            **{"trace_id": trace_id} if trace_id else {},
         )
         return True
     except Exception as e:
-        logger.warning("Failed to score trace %s: %s", trace_id, e)
+        logger.warning("Failed to create feedback for run %s: %s", run_id, e)
         return False
 
 
@@ -129,7 +280,7 @@ def _generate_trace_id(session_id: str, timestamp: Optional[str] = None) -> str:
     """
     Generate a deterministic trace ID for a session.
 
-    This allows the frontend to predict the trace ID and link back to Langfuse.
+    This allows the frontend to predict the trace ID and link back to LangSmith.
     """
     import hashlib
     if not timestamp:
@@ -202,8 +353,33 @@ REDIS_EVENT_BLOCK_MS = int(os.getenv("REDIS_EVENT_BLOCK_MS", "60000"))
 
 EXECUTION_MODE = os.getenv("EXECUTION_MODE", "direct").lower()  # direct | queued
 WORKFLOW_QUEUE_KEY = os.getenv("WORKFLOW_QUEUE_KEY", "agent:workflow:queue")
+WORKFLOW_QUEUE_PROCESSING_KEY = os.getenv(
+    "WORKFLOW_QUEUE_PROCESSING_KEY",
+    "agent:workflow:processing",
+)
+WORKFLOW_QUEUE_REQUEUE_ON_START = os.getenv("WORKFLOW_QUEUE_REQUEUE_ON_START", "true").lower() == "true"
 ENABLE_WORKFLOW_WORKER = os.getenv("ENABLE_WORKFLOW_WORKER", "false").lower() == "true"
 WORKFLOW_WORKER_POLL_SECONDS = float(os.getenv("WORKFLOW_WORKER_POLL_SECONDS", "1"))
+
+# Session continuity guard (helps serialize per-session runs across replicas)
+SESSION_RUN_GUARD_ENABLED = os.getenv("SESSION_RUN_GUARD_ENABLED", "true").lower() == "true"
+SESSION_RUN_GUARD_TTL_SECONDS = int(os.getenv("SESSION_RUN_GUARD_TTL_SECONDS", "14400"))
+SESSION_RUN_GUARD_KEY_PREFIX = os.getenv("SESSION_RUN_GUARD_KEY_PREFIX", "agent:session_guard:")
+
+# Deployment runtime compatibility (LangSmith-style primitives on local VM)
+DEPLOYMENT_STATE_FILE = os.getenv(
+    "DEPLOYMENT_STATE_FILE",
+    str(pathlib.Path(__file__).resolve().parent / "data" / "deployment_state.json"),
+)
+DEPLOYMENT_RUNTIME_MODE = os.getenv("DEPLOYMENT_RUNTIME_MODE", "local").strip().lower()  # local | proxy
+DEPLOYMENT_PROXY_URL = os.getenv("LANGSMITH_AGENT_SERVER_URL", "").strip().rstrip("/")
+DEPLOYMENT_PROXY_API_KEY = (
+    os.getenv("LANGSMITH_AGENT_SERVER_API_KEY")
+    or os.getenv("LANGSMITH_API_KEY")
+    or ""
+).strip()
+
+deployment_store = DeploymentRuntimeStore(DEPLOYMENT_STATE_FILE)
 
 graph_run_semaphore = asyncio.Semaphore(MAX_CONCURRENT_GRAPH_RUNS)
 
@@ -211,13 +387,14 @@ graph_run_semaphore = asyncio.Semaphore(MAX_CONCURRENT_GRAPH_RUNS)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global global_graph, global_mcp_client, housekeeper_task, workflow_worker_task
+    global global_graph, global_mcp_client, housekeeper_task, workflow_worker_task, deployment_scheduler
 
     # Startup
-    _init_langfuse()  # Initialize Langfuse early (before graph init)
+    _init_langsmith()  # Initialize LangSmith early (before graph init)
     await db.connect()
     await memory_manager.init()
     await cache.init()  # Initialize Redis cache
+    await deployment_store.load()
 
     housekeeper_stop_event.clear()
     housekeeper_task = asyncio.create_task(_housekeep_runs_loop())
@@ -232,6 +409,19 @@ async def lifespan(app: FastAPI):
             scheduler = setup_scheduler(db)
         except Exception as e:
             logger.warning("Ingestion scheduler unavailable: %s", e)
+
+    deployment_scheduler = None
+    if AsyncIOScheduler is None or CronTrigger is None:
+        logger.warning("Deployment cron scheduler unavailable: APScheduler cron components not installed")
+    else:
+        try:
+            deployment_scheduler = AsyncIOScheduler(timezone=timezone.utc)
+            deployment_scheduler.start()
+            await _sync_deployment_cron_jobs()
+            logger.info("Deployment cron scheduler started")
+        except Exception as e:
+            deployment_scheduler = None
+            logger.warning("Deployment cron scheduler init failed: %s", e)
 
     print("Initialising LangGraph agent with MCP servers…")
     try:
@@ -252,6 +442,17 @@ async def lifespan(app: FastAPI):
             scheduler.shutdown(wait=False)
         except Exception:
             pass
+    if deployment_scheduler:
+        try:
+            deployment_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        deployment_scheduler = None
+
+    for run_id, task in list(background_run_tasks.items()):
+        if task and not task.done():
+            task.cancel()
+        background_run_tasks.pop(run_id, None)
     if global_mcp_client:
         print("Shutting down MCP client…")
         await global_mcp_client.cleanup()
@@ -277,10 +478,25 @@ async def lifespan(app: FastAPI):
 
     await db.close()
     await cache.close()  # Close Redis connection
-    _shutdown_langfuse()  # Flush and shutdown Langfuse
+    await deployment_store.persist()
+    _shutdown_langsmith()  # Shutdown LangSmith
 
 
 app = FastAPI(lifespan=lifespan)
+
+if TracingMiddleware is not None:
+    tracing_pref = _parse_bool_env(os.getenv("LANGSMITH_TRACING"))
+    tracing_requested = True if tracing_pref is None else tracing_pref
+    has_api_key = bool(os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"))
+    if tracing_requested and has_api_key:
+        app.add_middleware(TracingMiddleware)
+        _langsmith_tracing_middleware_enabled = True
+        logger.info("LangSmith TracingMiddleware enabled for distributed trace propagation")
+    elif tracing_requested and not has_api_key:
+        logger.info("LangSmith TracingMiddleware not enabled: missing LANGSMITH_API_KEY/LANGCHAIN_API_KEY")
+else:
+    logger.info("LangSmith TracingMiddleware unavailable; install langsmith>=0.3.13")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOW_ORIGINS,
@@ -292,6 +508,8 @@ app.add_middleware(
         "X-Requested-With",
         "X-User-Id",
         "X-Tenant-Id",
+        "langsmith-trace",
+        "baggage",
     ],
 )
 
@@ -312,6 +530,23 @@ async def request_size_guard(request: Request, call_next):
         except ValueError:
             pass
     return await call_next(request)
+
+
+@app.middleware("http")
+async def langsmith_parent_trace_middleware(request: Request, call_next):
+    # TracingMiddleware already handles this path when available.
+    if _langsmith_tracing_middleware_enabled or langsmith_tracing_context is None:
+        return await call_next(request)
+
+    if not _langsmith_enabled:
+        return await call_next(request)
+
+    # Accept parent trace context from upstream services.
+    if not request.headers.get("langsmith-trace") and not request.headers.get("baggage"):
+        return await call_next(request)
+
+    with langsmith_tracing_context(parent=request.headers):
+        return await call_next(request)
 
 
 @app.middleware("http")
@@ -400,7 +635,7 @@ async def ready() -> JSONResponse:
         "long_term_memory": memory_manager.long_term_available,
         "queue_backend": queue_backend_ok,
         "event_backend": event_backend_ok,
-        "langfuse": _langfuse_enabled,
+        "langsmith": _langsmith_enabled,
     }
     critical_ok = checks["graph"] and checks["db"] and checks["queue_backend"] and checks["event_backend"]
     status = "ready" if critical_ok else "not_ready"
@@ -420,13 +655,25 @@ async def api_status() -> Dict[str, Any]:
     """Detailed status endpoint for frontend dashboards."""
     queue_backend_ok = cache.available if EXECUTION_MODE == "queued" else True
     event_backend_ok = cache.available if EVENT_BACKEND == "redis" else True
+    langsmith_endpoint = _langsmith_endpoint()
+    langsmith_project = _langsmith_project()
+    langsmith_ui_url = _langsmith_ui_base()
+    langsmith_dashboard_url = _langsmith_dashboard_url()
+
+    status_messages = {
+        "enabled": "Tracing active",
+        "missing_api_key": "Set LANGSMITH_API_KEY to enable tracing",
+        "disabled_by_env": "Tracing disabled via LANGSMITH_TRACING/LANGCHAIN_TRACING_V2",
+        "init_error": "LangSmith initialization failed",
+        "not_initialized": "LangSmith not initialized yet",
+    }
     
     return {
         "services": {
             "agent": global_graph is not None,
             "database": db.available,
             "cache": cache.available,
-            "langfuse": _langfuse_enabled,
+            "langsmith": _langsmith_enabled,
             "short_term_memory": memory_manager.short_term_available,
             "long_term_memory": memory_manager.long_term_available,
         },
@@ -436,9 +683,16 @@ async def api_status() -> Dict[str, Any]:
             "active_streams": len(run_started_at) if _redis_events_enabled() else len(event_queues),
             "tracked_sessions": len(session_latest_run),
         },
-        "langfuse": {
-            "enabled": _langfuse_enabled,
-            "host": (os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com") if _langfuse_enabled else None,
+        "langsmith": {
+            "enabled": _langsmith_enabled,
+            "endpoint": langsmith_endpoint,
+            "project": langsmith_project,
+            "ui_url": langsmith_ui_url,
+            "dashboard_url": langsmith_dashboard_url,
+            "tracing_middleware_enabled": _langsmith_tracing_middleware_enabled,
+            "reason": _langsmith_status_reason,
+            "message": status_messages.get(_langsmith_status_reason, "Unknown status"),
+            "last_error": _langsmith_last_error or None,
         },
         "runtime": _runtime_stats(),
         "timestamp": _now_iso(),
@@ -448,7 +702,8 @@ async def api_status() -> Dict[str, Any]:
 
 global_graph = None
 global_mcp_client = None
-event_queues: Dict[str, asyncio.Queue] = {}
+event_queues: Dict[str, list[str]] = {}
+event_signals: Dict[str, asyncio.Event] = {}
 session_latest_run: Dict[str, str] = {}
 run_session_index: Dict[str, str] = {}
 run_started_at: Dict[str, float] = {}
@@ -462,6 +717,11 @@ housekeeper_task: Optional[asyncio.Task] = None
 workflow_worker_stop_event = asyncio.Event()
 workflow_worker_task: Optional[asyncio.Task] = None
 _jwt_jwks_client = None
+deployment_scheduler: Optional[Any] = None
+deployment_cron_job_ids: Dict[str, str] = {}
+background_run_tasks: Dict[str, asyncio.Task] = {}
+local_session_run_guards: Dict[str, str] = {}
+local_session_run_guard_lock = asyncio.Lock()
 
 SPECIALIST_NODES = {"aviation_weather", "hk_weather", "aircraft", "general", "planning"}
 
@@ -493,6 +753,17 @@ def _runtime_stats() -> Dict[str, Any]:
         "tracked_sessions": len(session_latest_run),
         "run_registry_size": len(run_started_at),
         "dropped_events_total": sum(run_dropped_events.values()),
+        "deployment_runtime": {
+            "mode": DEPLOYMENT_RUNTIME_MODE,
+            "proxy_enabled": bool(DEPLOYMENT_PROXY_URL),
+            "assistants": len(deployment_store.assistants),
+            "threads": len(deployment_store.threads),
+            "runs": len(deployment_store.runs),
+            "crons": len(deployment_store.crons),
+            "background_runs": len(background_run_tasks),
+            "cron_scheduler_active": deployment_scheduler is not None,
+            "local_session_run_guards": len(local_session_run_guards),
+        },
         "limits": {
             "max_concurrent_graph_runs": MAX_CONCURRENT_GRAPH_RUNS,
             "max_pending_event_streams": MAX_PENDING_EVENT_STREAMS,
@@ -507,6 +778,10 @@ def _runtime_stats() -> Dict[str, Any]:
             "max_session_id_chars": MAX_SESSION_ID_CHARS,
             "event_backend": EVENT_BACKEND,
             "execution_mode": EXECUTION_MODE,
+            "workflow_queue_processing_key": WORKFLOW_QUEUE_PROCESSING_KEY,
+            "workflow_queue_requeue_on_start": WORKFLOW_QUEUE_REQUEUE_ON_START,
+            "session_run_guard_enabled": SESSION_RUN_GUARD_ENABLED,
+            "session_run_guard_ttl_seconds": SESSION_RUN_GUARD_TTL_SECONDS,
         },
     }
 
@@ -534,6 +809,68 @@ def _safe_session_id(session_id: str) -> str:
     return raw[:MAX_SESSION_ID_CHARS]
 
 
+def _session_run_guard_key(session_id: str) -> str:
+    return f"{SESSION_RUN_GUARD_KEY_PREFIX}{session_id}"
+
+
+async def _acquire_session_run_guard(session_id: str, run_id: str) -> Tuple[bool, str]:
+    """Acquire per-session run guard so only one active run executes per session.
+
+    Returns (acquired, holder_run_id).
+    """
+    if not SESSION_RUN_GUARD_ENABLED or not session_id:
+        return True, ""
+
+    run_id = str(run_id or "").strip() or f"guard-{uuid.uuid4().hex}"
+
+    if cache.available and getattr(cache, "_redis", None) is not None:
+        key = _session_run_guard_key(session_id)
+        try:
+            acquired = await cache._redis.set(
+                key,
+                run_id,
+                ex=max(30, SESSION_RUN_GUARD_TTL_SECONDS),
+                nx=True,
+            )
+            if acquired:
+                return True, run_id
+            holder = await cache._redis.get(key)
+            return False, str(holder or "")
+        except Exception:
+            pass
+
+    async with local_session_run_guard_lock:
+        holder = local_session_run_guards.get(session_id, "")
+        if holder and holder != run_id:
+            return False, holder
+        local_session_run_guards[session_id] = run_id
+    return True, run_id
+
+
+async def _release_session_run_guard(session_id: str, run_id: str) -> None:
+    if not SESSION_RUN_GUARD_ENABLED or not session_id:
+        return
+
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return
+
+    if cache.available and getattr(cache, "_redis", None) is not None:
+        key = _session_run_guard_key(session_id)
+        try:
+            holder = await cache._redis.get(key)
+            if str(holder or "") == run_id:
+                await cache._redis.delete(key)
+                return
+        except Exception:
+            pass
+
+    async with local_session_run_guard_lock:
+        holder = local_session_run_guards.get(session_id, "")
+        if holder == run_id:
+            local_session_run_guards.pop(session_id, None)
+
+
 def _validate_user_input_text(value: str) -> Optional[JSONResponse]:
     if not value:
         return JSONResponse({"error": "No input provided"}, status_code=400)
@@ -547,6 +884,113 @@ def _validate_user_input_text(value: str) -> Optional[JSONResponse]:
             status_code=400,
         )
     return None
+
+
+def _deployment_proxy_enabled(request: Optional[Request] = None) -> bool:
+    if DEPLOYMENT_RUNTIME_MODE == "proxy":
+        return True
+    if request is None:
+        return False
+    return str(request.query_params.get("proxy", "")).lower() in ("1", "true", "yes")
+
+
+async def _proxy_deployment_request(
+    request: Request,
+    upstream_path: str,
+    payload: Optional[Dict[str, Any]] = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> JSONResponse:
+    if not DEPLOYMENT_PROXY_URL:
+        return JSONResponse(
+            {
+                "error": "Deployment proxy is not configured",
+                "details": "Set LANGSMITH_AGENT_SERVER_URL and optional LANGSMITH_AGENT_SERVER_API_KEY",
+            },
+            status_code=503,
+        )
+
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    if DEPLOYMENT_PROXY_API_KEY:
+        headers["X-Api-Key"] = DEPLOYMENT_PROXY_API_KEY
+
+    auth_header = request.headers.get("Authorization", "").strip()
+    if auth_header and "X-Api-Key" not in headers:
+        headers["Authorization"] = auth_header
+
+    url = f"{DEPLOYMENT_PROXY_URL}{upstream_path}"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=params,
+                json=payload,
+            )
+    except Exception as e:
+        return JSONResponse(
+            {
+                "error": "Deployment proxy request failed",
+                "details": str(e),
+                "upstream_url": url,
+            },
+            status_code=502,
+        )
+
+    try:
+        body = response.json()
+    except Exception:
+        body = {"raw": response.text}
+    return JSONResponse(body, status_code=response.status_code)
+
+
+def _normalize_run_input(data: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        return {"messages": []}
+    raw = data.get("input", data)
+    if isinstance(raw, dict):
+        if isinstance(raw.get("messages"), list):
+            return raw
+        if isinstance(raw.get("content"), str):
+            return {"messages": [{"role": "user", "content": raw.get("content", "")}]}
+        if isinstance(raw.get("text"), str):
+            return {"messages": [{"role": "user", "content": raw.get("text", "")}]}
+    if isinstance(raw, str):
+        return {"messages": [{"role": "user", "content": raw}]}
+    return {"messages": []}
+
+
+def _extract_user_input_text(input_payload: Dict[str, Any]) -> str:
+    if not isinstance(input_payload, dict):
+        return ""
+
+    messages = input_payload.get("messages", [])
+    if isinstance(messages, list):
+        for msg in reversed(messages):
+            if not isinstance(msg, dict):
+                continue
+            role = str(msg.get("role", "")).lower()
+            if role in ("user", "human") and msg.get("content") is not None:
+                return str(msg.get("content"))
+        for msg in reversed(messages):
+            if isinstance(msg, dict) and msg.get("content") is not None:
+                return str(msg.get("content"))
+
+    fallback = input_payload.get("input") or input_payload.get("query") or input_payload.get("content")
+    return str(fallback or "")
+
+
+def _assistant_runtime_config(assistant: Dict[str, Any]) -> Dict[str, Any]:
+    config = assistant.get("config", {}) if isinstance(assistant, dict) else {}
+    if not isinstance(config, dict):
+        return {}
+    return {
+        "model": str(config.get("model", "") or "").strip(),
+        "base_url": str(config.get("base_url", "") or "").strip(),
+        "api_key": str(config.get("api_key", "") or "").strip(),
+        "assistant_system_prompt": str(config.get("assistant_system_prompt", "") or "").strip(),
+        "forced_route": str(config.get("forced_route", "") or "").strip(),
+    }
 
 
 def _resolve_auth_subject(request: Request) -> Dict[str, str]:
@@ -602,6 +1046,41 @@ async def _set_session_latest(session_id: str, run_id: str) -> None:
     if not _redis_events_enabled():
         return
     await cache._redis.setex(_session_latest_key(session_id), RUN_REGISTRY_TTL_SECONDS, run_id)
+
+
+async def _register_run_stream(run_id: str, session_id: str) -> Optional[JSONResponse]:
+    async with event_queues_lock:
+        now = time.time()
+        stale = [
+            rid for rid, started in run_started_at.items()
+            if now - (run_completed_at.get(rid, started)) > RUN_REGISTRY_TTL_SECONDS
+        ]
+        for rid in stale:
+            await _cleanup_run_locked(rid)
+
+        current_streams = len(event_queues) if not _redis_events_enabled() else len(run_started_at)
+        if current_streams >= MAX_PENDING_EVENT_STREAMS:
+            return JSONResponse(
+                {
+                    "error": "Server busy",
+                    "details": "Too many pending workflow streams",
+                    "active_event_streams": current_streams,
+                    "max_pending_event_streams": MAX_PENDING_EVENT_STREAMS,
+                },
+                status_code=503,
+            )
+
+        if not _redis_events_enabled():
+            event_queues[run_id] = []
+            event_signals[run_id] = asyncio.Event()
+        session_latest_run[session_id] = run_id
+        run_session_index[run_id] = session_id
+        run_started_at[run_id] = now
+        run_dropped_events[run_id] = 0
+
+    await _set_run_metadata(run_id, session_id)
+    await _set_session_latest(session_id, run_id)
+    return None
 
 
 async def _get_session_latest(session_id: str) -> str:
@@ -753,6 +1232,7 @@ async def _enforce_rate_limit(
 
 async def _cleanup_run_locked(run_id: str) -> None:
     event_queues.pop(run_id, None)
+    event_signals.pop(run_id, None)
     run_started_at.pop(run_id, None)
     run_completed_at.pop(run_id, None)
     run_dropped_events.pop(run_id, None)
@@ -810,6 +1290,7 @@ async def _enqueue_workflow_job(run_id: str, session_id: str, user_input: str) -
         "session_id": session_id,
         "user_input": user_input,
         "enqueued_at": _now_iso(),
+        "attempt": 0,
     }
     try:
         await cache._redis.lpush(WORKFLOW_QUEUE_KEY, json.dumps(job))
@@ -819,35 +1300,85 @@ async def _enqueue_workflow_job(run_id: str, session_id: str, user_input: str) -
         return False
 
 
+async def _requeue_processing_jobs_on_start() -> int:
+    """Move abandoned jobs back to the pending queue at worker startup."""
+    if not cache.available or getattr(cache, "_redis", None) is None:
+        return 0
+
+    moved = 0
+    while True:
+        raw = await cache._redis.rpop(WORKFLOW_QUEUE_PROCESSING_KEY)
+        if not raw:
+            break
+        await cache._redis.lpush(WORKFLOW_QUEUE_KEY, raw)
+        moved += 1
+    return moved
+
+
 async def _workflow_worker_loop() -> None:
     if not cache.available or getattr(cache, "_redis", None) is None:
         logger.warning("Workflow worker requested but Redis cache is unavailable")
         return
 
+    if WORKFLOW_QUEUE_REQUEUE_ON_START:
+        moved = await _requeue_processing_jobs_on_start()
+        if moved:
+            logger.info("Workflow worker recovered %d abandoned job(s)", moved)
+
     logger.info("Workflow worker started (queue=%s)", WORKFLOW_QUEUE_KEY)
     while not workflow_worker_stop_event.is_set():
         try:
-            item = await cache._redis.brpop(WORKFLOW_QUEUE_KEY, timeout=5)
-            if not item:
+            raw_payload = await cache._redis.brpoplpush(
+                WORKFLOW_QUEUE_KEY,
+                WORKFLOW_QUEUE_PROCESSING_KEY,
+                timeout=5,
+            )
+            if not raw_payload:
                 await asyncio.sleep(WORKFLOW_WORKER_POLL_SECONDS)
                 continue
 
-            _, raw_payload = item
             try:
                 job = json.loads(raw_payload)
             except Exception:
                 logger.warning("Skipping invalid workflow queue payload")
+                await cache._redis.lrem(WORKFLOW_QUEUE_PROCESSING_KEY, 1, raw_payload)
                 continue
 
             run_id = str(job.get("run_id", "")).strip()
             session_id = _safe_session_id(str(job.get("session_id", "")).strip())
             user_input = str(job.get("user_input", ""))
+            attempt = int(job.get("attempt", 0) or 0)
 
             if not run_id or not user_input:
                 logger.warning("Skipping workflow job with missing run_id/user_input")
+                await cache._redis.lrem(WORKFLOW_QUEUE_PROCESSING_KEY, 1, raw_payload)
                 continue
 
-            await _run_with_events(user_input, session_id, event_key=run_id)
+            acquired, holder = await _acquire_session_run_guard(session_id, run_id)
+            if not acquired:
+                # Another run for the same session is active. Requeue for retry.
+                job["attempt"] = attempt + 1
+                job["requeued_at"] = _now_iso()
+                await cache._redis.lrem(WORKFLOW_QUEUE_PROCESSING_KEY, 1, raw_payload)
+                await cache._redis.rpush(WORKFLOW_QUEUE_KEY, json.dumps(job))
+                await asyncio.sleep(min(2.0, WORKFLOW_WORKER_POLL_SECONDS + 0.2))
+                logger.info(
+                    "Workflow job %s deferred; session %s busy with run %s",
+                    run_id,
+                    session_id,
+                    holder or "unknown",
+                )
+                continue
+
+            try:
+                await _run_with_events(
+                    user_input,
+                    session_id,
+                    event_key=run_id,
+                    session_guard_owner=run_id,
+                )
+            finally:
+                await cache._redis.lrem(WORKFLOW_QUEUE_PROCESSING_KEY, 1, raw_payload)
         except Exception as e:
             logger.exception("Workflow worker loop error: %s", e)
             await asyncio.sleep(WORKFLOW_WORKER_POLL_SECONDS)
@@ -871,48 +1402,58 @@ def _extract_planning_data(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-# ── Langfuse callback helpers ─────────────────────────────────────────────────
+# ── LangSmith config helpers ──────────────────────────────────────────────────
 
-def _make_langfuse_callback():
+
+def _build_config(
+    session_id: str,
+    trace_name: str = "",
+    user_id: str = "",
+    assistant_id: str = "",
+    assistant_config: Optional[Dict[str, Any]] = None,
+) -> dict:
     """
-    Create a Langfuse CallbackHandler for LangChain/LangGraph tracing.
+    Build LangGraph config with thread_id and LangSmith metadata.
 
-    In SDK v3+, the CallbackHandler uses the pre-initialized singleton client.
-    Trace attributes (session_id, user_id, tags) are passed via metadata in invoke().
+    LangSmith captures config metadata/tags automatically when tracing is enabled.
     """
-    if not _langfuse_enabled:
-        return None
-    try:
-        from langfuse.langchain import CallbackHandler
-        # v3+ pattern: no constructor args, uses singleton client
-        return CallbackHandler()
-    except Exception as e:
-        logger.warning("Langfuse callback unavailable: %s", e)
-        return None
-
-
-def _build_config(session_id: str, trace_name: str = "", user_id: str = "") -> dict:
-    """
-    Build LangGraph config with thread_id and optional Langfuse callbacks.
-
-    Trace attributes are passed via metadata (v3+ pattern):
-    - langfuse_session_id: Groups traces into a session
-    - langfuse_user_id: Associates traces with a user
-    - langfuse_tags: List of tags for filtering
-    """
-    cfg: dict = {
-        "configurable": {"thread_id": session_id},
-        "metadata": {
-            "langfuse_session_id": session_id,
-            "langfuse_trace_name": trace_name or session_id[:80],
-        },
+    metadata: Dict[str, Any] = {
+        "session_id": session_id,
+        "thread_id": session_id,
+        "conversation_id": session_id,
+        "trace_name": trace_name or session_id[:80],
     }
-    if user_id:
-        cfg["metadata"]["langfuse_user_id"] = user_id
+    tags = ["aviation-agent", "langgraph"]
 
-    lf = _make_langfuse_callback()
-    if lf:
-        cfg["callbacks"] = [lf]
+    if session_id:
+        tags.append(f"session:{session_id[:16]}")
+
+    if user_id:
+        metadata["user_id"] = user_id
+        tags.append("has-user")
+
+    if assistant_id:
+        metadata["assistant_id"] = assistant_id
+        tags.append(f"assistant:{assistant_id[:16]}")
+
+    assistant_config = assistant_config or {}
+    runtime_overrides: Dict[str, Any] = {}
+    for key in ("model", "base_url", "api_key", "assistant_system_prompt", "forced_route"):
+        raw = assistant_config.get(key)
+        if raw is None:
+            continue
+        value = str(raw).strip()
+        if value:
+            runtime_overrides[key] = value
+            metadata[f"assistant_{key}"] = value if key != "api_key" else "provided"
+
+    cfg: dict = {
+        "configurable": {"thread_id": session_id, **runtime_overrides},
+        "metadata": metadata,
+        "tags": tags,
+    }
+    if trace_name:
+        cfg["run_name"] = trace_name[:80]
     return cfg
 
 
@@ -926,19 +1467,18 @@ async def _push(session_id: str, data: Dict[str, Any]) -> None:
         except Exception as e:
             logger.debug("Redis event push failed for %s: %s", session_id, e)
 
-    q = event_queues.get(session_id)
-    if q:
+    buffer = event_queues.get(session_id)
+    if buffer is not None:
         payload = json.dumps(data)
-        try:
-            q.put_nowait(payload)
-        except asyncio.QueueFull:
-            # Backpressure strategy for scale: drop oldest event to keep freshest state.
-            try:
-                _ = q.get_nowait()
-                q.put_nowait(payload)
-                run_dropped_events[session_id] = run_dropped_events.get(session_id, 0) + 1
-            except (asyncio.QueueEmpty, asyncio.QueueFull):
-                run_dropped_events[session_id] = run_dropped_events.get(session_id, 0) + 1
+        if len(buffer) >= EVENT_QUEUE_MAXSIZE:
+            # Keep latest events while allowing all subscribers to replay consistently.
+            drop_count = len(buffer) - EVENT_QUEUE_MAXSIZE + 1
+            del buffer[:drop_count]
+            run_dropped_events[session_id] = run_dropped_events.get(session_id, 0) + drop_count
+        buffer.append(payload)
+        signal = event_signals.get(session_id)
+        if signal is not None:
+            signal.set()
 
 
 def _fmt_input(raw: Any) -> str:
@@ -960,7 +1500,30 @@ def _tool_call_names(tool_calls: list) -> str:
     return ", ".join(names)
 
 
-async def _run_with_events(user_input: str, session_id: str, event_key: Optional[str] = None) -> None:
+def _event_trace_fields(ev: Dict[str, Any]) -> Dict[str, Any]:
+    run_id = str(ev.get("run_id") or "").strip()
+    parent_ids = ev.get("parent_ids") or []
+    parent_run_id = ""
+    if isinstance(parent_ids, list) and parent_ids:
+        parent_run_id = str(parent_ids[-1] or "").strip()
+
+    data: Dict[str, Any] = {}
+    if run_id:
+        data["run_id"] = run_id
+    if parent_run_id:
+        data["parent_run_id"] = parent_run_id
+    return data
+
+
+@traceable(name="server.workflow_events", run_type="chain")
+async def _run_with_events(
+    user_input: str,
+    session_id: str,
+    event_key: Optional[str] = None,
+    assistant_id: str = "",
+    assistant_config: Optional[Dict[str, Any]] = None,
+    session_guard_owner: str = "",
+) -> str:
     """Run graph and push rich SSE workflow events into the session queue."""
     global active_graph_runs, max_active_graph_runs_seen
 
@@ -974,9 +1537,14 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
             "timestamp": _now_iso(), "raw": {},
         })
         await _push(session_id, {"__done__": True})
-        return
+        return ""
 
-    config = _build_config(graph_session_id, trace_name=user_input[:80])
+    config = _build_config(
+        graph_session_id,
+        trace_name=user_input[:80],
+        assistant_id=assistant_id,
+        assistant_config=assistant_config,
+    )
     active_nodes: set[str] = set()
     node_start: dict[str, float] = {}
     tool_start: dict[str, float] = {}
@@ -986,6 +1554,7 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
 
     # Per-session step tracking (counts LLM → tool-call rounds in a specialist)
     step_counts: dict[str, int] = {}   # keyed by specialist node name
+    final_response_text = ""
 
     INTERNAL = {"agent", "tools", *PLANNING_INTERNAL_NODES}
     INTERNAL_LABELS = {"agent": "LLM Call", "tools": "Tool Execution"}
@@ -998,6 +1567,32 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
     try:
         request_id = f"{graph_session_id}:{uuid.uuid4().hex}"
         mcp_module.set_request_context(request_id)
+
+        trace_context = _langsmith_trace_context()
+        if trace_context:
+            run_tree = get_current_run_tree()
+            distributed_headers: Dict[str, Any] = {}
+            if run_tree and hasattr(run_tree, "to_headers"):
+                try:
+                    distributed_headers = run_tree.to_headers() or {}
+                except Exception:
+                    distributed_headers = {}
+
+            await _push(session_id, {
+                "nodeId": "langsmith",
+                "event_type": "trace_context",
+                "status": "started",
+                "label": "LangSmith Trace",
+                "details": "Trace context initialized for this run",
+                "timestamp": _now_iso(),
+                "distributed_headers": distributed_headers,
+                **trace_context,
+                "raw": {
+                    "trace_context": trace_context,
+                    "distributed_headers": distributed_headers,
+                },
+            })
+
         async for ev in global_graph.astream_events(
             {"messages": [HumanMessage(content=user_input)]},
             config=config,
@@ -1007,6 +1602,7 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
             meta    = ev.get("metadata", {})
             node    = meta.get("langgraph_node", "")
             ts      = _now_iso()
+            trace_fields = _event_trace_fields(ev)
 
             # ── Node started ───────────────────────────────────────────────────
             if kind == "on_chain_start" and node and node not in active_nodes:
@@ -1032,6 +1628,7 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
                             "route": node,
                             "duration_ms": router_dur,
                             "timestamp": ts,
+                            **trace_fields,
                             "raw": {"node": "router", "route": node},
                         })
 
@@ -1045,6 +1642,7 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
                     "details":     f"{label}: processing…",
                     "parent_node": current_specialist if node in INTERNAL else None,
                     "timestamp":   ts,
+                    **trace_fields,
                     "raw":         {"node": node},
                 })
 
@@ -1074,6 +1672,7 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
                         "parent_node": current_specialist if node in INTERNAL else None,
                         "duration_ms": duration_ms,
                         "timestamp":   ts,
+                        **trace_fields,
                         "raw":         {"node": node, "steps": total_steps if node in SPECIALIST_NODES else None},
                     })
 
@@ -1091,6 +1690,7 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
                             "details": f"Generated {len(plan_steps)} steps",
                             "steps": plan_steps,
                             "timestamp": ts,
+                            **trace_fields,
                             "raw": {"steps": plan_steps},
                         })
 
@@ -1131,6 +1731,7 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
                         "parent_node": parent if parent != node else None,
                         "step":        step_num,
                         "timestamp":   ts,
+                        **trace_fields,
                         "raw":         {
                             "node":       node,
                             "step":       step_num,
@@ -1142,6 +1743,7 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
                     })
                 elif content:
                     # LLM generated a final response → synthesis step
+                    final_response_text = str(content)
                     step_num = step_counts.get(parent, 0) + 1
                     step_counts[parent] = step_num
                     preview  = content[:120].replace("\n", " ")
@@ -1154,6 +1756,7 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
                         "parent_node": parent if parent != node else None,
                         "step":        step_num,
                         "timestamp":   ts,
+                        **trace_fields,
                         "raw":         {
                             "node":    node,
                             "step":    step_num,
@@ -1177,6 +1780,7 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
                     "tool_input":  tool_input if isinstance(tool_input, dict) else {},
                     "parent_node": parent,
                     "timestamp":   ts,
+                    **trace_fields,
                     "raw":         {"tool": tool_name, "input": tool_input, "parent": parent},
                 })
 
@@ -1205,6 +1809,7 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
                     "parent_node":  parent,
                     "duration_ms":  duration_ms,
                     "timestamp":    ts,
+                    **trace_fields,
                     "raw":          {
                         "tool":           tool_name,
                         "output_preview": output_preview,
@@ -1226,8 +1831,286 @@ async def _run_with_events(user_input: str, session_id: str, event_key: Optional
         async with event_queues_lock:
             run_completed_at[session_id] = time.time()
         await _mark_run_completed(session_id)
+        if session_guard_owner:
+            await _release_session_run_guard(graph_session_id, session_guard_owner)
         mcp_module.clear_request_context()
         await _push(session_id, {"__done__": True})
+    return final_response_text
+
+
+TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
+
+
+async def _deployment_background_run_task(
+    run_id: str,
+    thread_id: str,
+    assistant_id: str,
+    assistant_config: Dict[str, Any],
+    user_input: str,
+    cleanup_thread_on_complete: bool = False,
+) -> None:
+    await deployment_store.update_run(run_id, status="running")
+    await deployment_store.append_thread_message(thread_id, "human", user_input, run_id=run_id)
+
+    if db.available:
+        await db.save_conversation(
+            thread_id,
+            "human",
+            user_input,
+            metadata={"run_id": run_id, "assistant_id": assistant_id, "source": "deployment"},
+        )
+
+    try:
+        response_text = await _run_with_events(
+            user_input=user_input,
+            session_id=thread_id,
+            event_key=run_id,
+            assistant_id=assistant_id,
+            assistant_config=assistant_config,
+            session_guard_owner=run_id,
+        )
+
+        if response_text:
+            await deployment_store.append_thread_message(thread_id, "assistant", response_text, run_id=run_id)
+            if db.available:
+                await db.save_conversation(
+                    thread_id,
+                    "ai",
+                    response_text,
+                    metadata={"run_id": run_id, "assistant_id": assistant_id, "source": "deployment"},
+                )
+
+        await deployment_store.update_run(
+            run_id,
+            status="completed",
+            output={"message": response_text or "", "thread_id": thread_id, "assistant_id": assistant_id},
+            error=None,
+        )
+    except asyncio.CancelledError:
+        await deployment_store.update_run(
+            run_id,
+            status="cancelled",
+            error="Run cancelled by user",
+        )
+        await _push(
+            run_id,
+            {
+                "nodeId": "run",
+                "event_type": "run",
+                "status": "cancelled",
+                "label": "Run Cancelled",
+                "details": "Execution cancelled by user",
+                "timestamp": _now_iso(),
+                "raw": {"run_id": run_id},
+            },
+        )
+        await _push(run_id, {"__done__": True})
+        raise
+    except Exception as e:
+        await deployment_store.update_run(run_id, status="failed", error=str(e))
+        await _push(
+            run_id,
+            {
+                "nodeId": "run",
+                "event_type": "error",
+                "status": "failed",
+                "label": "Run Failed",
+                "details": str(e),
+                "timestamp": _now_iso(),
+                "raw": {"run_id": run_id, "error": str(e)},
+            },
+        )
+    finally:
+        await _release_session_run_guard(thread_id, run_id)
+        background_run_tasks.pop(run_id, None)
+        if cleanup_thread_on_complete:
+            await deployment_store.delete_thread(thread_id)
+
+
+async def _start_deployment_background_run(
+    thread_id: str,
+    assistant_ref: str,
+    input_payload: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None,
+    mode: str = "background",
+    cleanup_thread_on_complete: bool = False,
+) -> Tuple[Optional[Dict[str, Any]], Optional[JSONResponse]]:
+    thread = await deployment_store.get_thread(thread_id)
+    if not thread:
+        return None, JSONResponse({"error": f"Thread not found: {thread_id}"}, status_code=404)
+
+    assistant = await deployment_store.resolve_assistant(assistant_ref)
+    if not assistant:
+        return None, JSONResponse({"error": f"Assistant not found: {assistant_ref}"}, status_code=404)
+
+    user_input = _extract_user_input_text(input_payload)
+    invalid_input = _validate_user_input_text(user_input)
+    if invalid_input:
+        return None, invalid_input
+
+    assistant_id = str(assistant.get("assistant_id", "")).strip()
+    run = await deployment_store.create_run(
+        thread_id=thread_id,
+        assistant_id=assistant_id,
+        input_payload=input_payload,
+        metadata=metadata or {},
+        mode=mode,
+        status="queued",
+    )
+
+    run_id = str(run.get("run_id", "")).strip()
+
+    acquired, holder = await _acquire_session_run_guard(thread_id, run_id)
+    if not acquired:
+        await deployment_store.update_run(
+            run_id,
+            status="failed",
+            error=f"Thread already has an active run: {holder or 'unknown'}",
+        )
+        return None, JSONResponse(
+            {
+                "error": "Thread already has an active run",
+                "thread_id": thread_id,
+                "active_run_id": holder or None,
+            },
+            status_code=409,
+        )
+
+    stream_state_error = await _register_run_stream(run_id=run_id, session_id=thread_id)
+    if stream_state_error:
+        await deployment_store.update_run(run_id, status="failed", error="Unable to allocate event stream")
+        await _release_session_run_guard(thread_id, run_id)
+        return None, stream_state_error
+
+    assistant_config = _assistant_runtime_config(assistant)
+    task = asyncio.create_task(
+        _deployment_background_run_task(
+            run_id=run_id,
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            assistant_config=assistant_config,
+            user_input=user_input,
+            cleanup_thread_on_complete=cleanup_thread_on_complete,
+        )
+    )
+    background_run_tasks[run_id] = task
+
+    return await deployment_store.get_run(run_id), None
+
+
+async def _remove_deployment_cron_job(cron_id: str) -> None:
+    job_id = deployment_cron_job_ids.pop(cron_id, None)
+    if deployment_scheduler and job_id:
+        try:
+            deployment_scheduler.remove_job(job_id)
+        except Exception:
+            pass
+    await deployment_store.set_cron_next_run(cron_id, None)
+
+
+async def _register_deployment_cron_job(cron: Dict[str, Any]) -> bool:
+    if not deployment_scheduler or CronTrigger is None:
+        return False
+
+    cron_id = str(cron.get("cron_id", "")).strip()
+    if not cron_id:
+        return False
+
+    await _remove_deployment_cron_job(cron_id)
+
+    schedule = str(cron.get("schedule", "")).strip()
+    if not schedule:
+        return False
+
+    try:
+        trigger = CronTrigger.from_crontab(schedule, timezone=timezone.utc)
+    except Exception as e:
+        logger.warning("Invalid cron schedule for %s: %s", cron_id, e)
+        return False
+
+    def _dispatch(c_id: str = cron_id) -> None:
+        asyncio.create_task(_fire_deployment_cron_job(c_id))
+
+    job_id = f"deployment-cron:{cron_id}"
+    deployment_scheduler.add_job(
+        _dispatch,
+        trigger=trigger,
+        id=job_id,
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    deployment_cron_job_ids[cron_id] = job_id
+
+    next_run_at = None
+    try:
+        job = deployment_scheduler.get_job(job_id)
+        if job and job.next_run_time:
+            next_run_at = job.next_run_time.isoformat()
+    except Exception:
+        next_run_at = None
+
+    await deployment_store.set_cron_next_run(cron_id, next_run_at)
+    return True
+
+
+async def _sync_deployment_cron_jobs() -> None:
+    if not deployment_scheduler:
+        return
+
+    for cron_id in list(deployment_cron_job_ids.keys()):
+        await _remove_deployment_cron_job(cron_id)
+
+    crons = await deployment_store.search_crons(limit=10_000, offset=0)
+    for cron in crons:
+        if cron.get("active"):
+            await _register_deployment_cron_job(cron)
+
+
+async def _fire_deployment_cron_job(cron_id: str) -> None:
+    cron = await deployment_store.get_cron(cron_id)
+    if not cron or not cron.get("active"):
+        return
+
+    assistant_ref = str(cron.get("assistant_id", "")).strip() or "agent"
+    input_payload = cron.get("input", {})
+    configured_thread_id = str(cron.get("thread_id") or "").strip()
+    transient_thread = False
+
+    thread_id = configured_thread_id
+    if not thread_id:
+        thread = await deployment_store.create_thread(
+            metadata={"created_by": "cron", "cron_id": cron_id},
+            config={},
+            values=None,
+        )
+        thread_id = str(thread.get("thread_id", ""))
+        transient_thread = True
+
+    run_metadata = dict(cron.get("metadata") or {})
+    run_metadata["cron_id"] = cron_id
+
+    cleanup_thread = transient_thread and str(cron.get("on_run_completed", "delete")) == "delete"
+    run, error_response = await _start_deployment_background_run(
+        thread_id=thread_id,
+        assistant_ref=assistant_ref,
+        input_payload=input_payload if isinstance(input_payload, dict) else {},
+        metadata=run_metadata,
+        mode="cron",
+        cleanup_thread_on_complete=cleanup_thread,
+    )
+    if error_response:
+        logger.warning("Cron %s failed to start run: %s", cron_id, error_response.body)
+        return
+
+    next_run_at = None
+    job_id = deployment_cron_job_ids.get(cron_id)
+    if deployment_scheduler and job_id:
+        job = deployment_scheduler.get_job(job_id)
+        if job and job.next_run_time:
+            next_run_at = job.next_run_time.isoformat()
+
+    await deployment_store.mark_cron_run(cron_id, str(run.get("run_id", "")), next_run_at=next_run_at)
 
 
 # ── POST /api/agent/execute ────────────────────────────────────────────────────
@@ -1255,37 +2138,9 @@ async def execute_workflow(request: Request):
     if not global_graph:
         return JSONResponse({"error": "Agent not initialised"}, status_code=500)
 
-    async with event_queues_lock:
-        # Opportunistic cleanup before admission checks.
-        now = time.time()
-        stale = [
-            rid for rid, started in run_started_at.items()
-            if now - (run_completed_at.get(rid, started)) > RUN_REGISTRY_TTL_SECONDS
-        ]
-        for rid in stale:
-            await _cleanup_run_locked(rid)
-
-        current_streams = len(event_queues) if not _redis_events_enabled() else len(run_started_at)
-        if current_streams >= MAX_PENDING_EVENT_STREAMS:
-            return JSONResponse(
-                {
-                    "error": "Server busy",
-                    "details": "Too many pending workflow streams",
-                    "active_event_streams": current_streams,
-                    "max_pending_event_streams": MAX_PENDING_EVENT_STREAMS,
-                },
-                status_code=503,
-            )
-
-        if not _redis_events_enabled():
-            event_queues[run_id] = asyncio.Queue(maxsize=EVENT_QUEUE_MAXSIZE)
-        session_latest_run[session_id] = run_id
-        run_session_index[run_id] = session_id
-        run_started_at[run_id] = now
-        run_dropped_events[run_id] = 0
-
-    await _set_run_metadata(run_id, session_id)
-    await _set_session_latest(session_id, run_id)
+    stream_state_error = await _register_run_stream(run_id=run_id, session_id=session_id)
+    if stream_state_error:
+        return stream_state_error
 
     if EXECUTION_MODE == "queued":
         queued = await _enqueue_workflow_job(run_id, session_id, user_input)
@@ -1306,7 +2161,27 @@ async def execute_workflow(request: Request):
             }
         )
 
-    asyncio.create_task(_run_with_events(user_input, session_id, event_key=run_id))
+    acquired, holder = await _acquire_session_run_guard(session_id, run_id)
+    if not acquired:
+        async with event_queues_lock:
+            await _cleanup_run_locked(run_id)
+        return JSONResponse(
+            {
+                "error": "Session already has an active run",
+                "session_id": session_id,
+                "active_run_id": holder or None,
+            },
+            status_code=409,
+        )
+
+    asyncio.create_task(
+        _run_with_events(
+            user_input,
+            session_id,
+            event_key=run_id,
+            session_guard_owner=run_id,
+        )
+    )
     return JSONResponse({
         "status": "started",
         "mode": "direct",
@@ -1393,26 +2268,40 @@ async def stream_events(request: Request, session_id: str = "default", run_id: s
             await asyncio.sleep(interval)
             waited += interval
 
-        q: Optional[asyncio.Queue] = event_queues.get(effective_run_id)
-        if q is None:
+        if effective_run_id not in event_queues:
             yield "event: end\ndata: {}\n\n"
             return
 
+        cursor = 0
         try:
             while True:
+                buffer = event_queues.get(effective_run_id)
+                if buffer is None:
+                    yield "event: end\ndata: {}\n\n"
+                    return
+
+                while cursor < len(buffer):
+                    raw = buffer[cursor]
+                    cursor += 1
+                    try:
+                        if json.loads(raw).get("__done__"):
+                            saw_done = True
+                            yield "event: end\ndata: {}\n\n"
+                            return
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+                    yield f"data: {raw}\n\n"
+
+                signal = event_signals.get(effective_run_id)
+                if signal is None:
+                    yield "event: end\ndata: {}\n\n"
+                    return
                 try:
-                    raw = await asyncio.wait_for(q.get(), timeout=60.0)
+                    await asyncio.wait_for(signal.wait(), timeout=60.0)
+                    signal.clear()
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
-                try:
-                    if json.loads(raw).get("__done__"):
-                        saw_done = True
-                        yield "event: end\ndata: {}\n\n"
-                        break
-                except (json.JSONDecodeError, AttributeError):
-                    pass
-                yield f"data: {raw}\n\n"
         finally:
             if saw_done:
                 async with event_queues_lock:
@@ -1454,17 +2343,9 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
 
     # Register run for workflow events (same as /api/agent/execute)
     run_id = f"run-{uuid.uuid4().hex}"
-    now = time.time()
-    if not _redis_events_enabled():
-        event_queues[run_id] = asyncio.Queue(maxsize=EVENT_QUEUE_MAXSIZE)
-    session_latest_run[effective_session_id] = run_id
-    run_session_index[run_id] = effective_session_id
-    run_started_at[run_id] = now
-    run_dropped_events[run_id] = 0
-    
-    # Set Redis metadata for workflow events (if Redis enabled)
-    await _set_run_metadata(run_id, effective_session_id)
-    await _set_session_latest(effective_session_id, run_id)
+    stream_state_error = await _register_run_stream(run_id=run_id, session_id=effective_session_id)
+    if stream_state_error:
+        return stream_state_error
 
     async def stream_tokens():
         global active_graph_runs, max_active_graph_runs_seen
@@ -1486,6 +2367,32 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
 
         try:
             mcp_module.set_request_context(request_id)
+
+            trace_context = _langsmith_trace_context()
+            if trace_context:
+                run_tree = get_current_run_tree()
+                distributed_headers: Dict[str, Any] = {}
+                if run_tree and hasattr(run_tree, "to_headers"):
+                    try:
+                        distributed_headers = run_tree.to_headers() or {}
+                    except Exception:
+                        distributed_headers = {}
+
+                await _push(run_id, {
+                    "nodeId": "langsmith",
+                    "event_type": "trace_context",
+                    "status": "started",
+                    "label": "LangSmith Trace",
+                    "details": "Trace context initialized for this run",
+                    "timestamp": _now_iso(),
+                    "distributed_headers": distributed_headers,
+                    **trace_context,
+                    "raw": {
+                        "trace_context": trace_context,
+                        "distributed_headers": distributed_headers,
+                    },
+                })
+
             async for ev in global_graph.astream_events(
                 {"messages": [HumanMessage(content=input)]},
                 config=config,
@@ -1495,6 +2402,7 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                 meta = ev.get("metadata", {})
                 node = meta.get("langgraph_node", "")
                 ts = _now_iso()
+                trace_fields = _event_trace_fields(ev)
 
                 # ── Node started (push workflow event) ───────────────────────
                 if kind == "on_chain_start" and node and node not in active_nodes:
@@ -1509,6 +2417,7 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                             "label": "🧭 Router",
                             "details": "Classifying query...",
                             "timestamp": ts,
+                            **trace_fields,
                             "raw": {},
                         })
 
@@ -1532,6 +2441,7 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                             "route": node,
                             "duration_ms": router_dur,
                             "timestamp": ts,
+                            **trace_fields,
                             "raw": {"node": "router", "route": node},
                         })
                     
@@ -1543,6 +2453,7 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                         "label": _NODE_LABELS.get(node, node),
                         "details": "Processing query...",
                         "timestamp": ts,
+                        **trace_fields,
                         "raw": {},
                     })
 
@@ -1556,6 +2467,17 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                             "event: plan\n"
                             f"data: {json.dumps({'plan': plan_steps, 'steps': plan_steps, 'timestamp': ts})}\n\n"
                         )
+                        await _push(run_id, {
+                            "nodeId": "planning",
+                            "event_type": "plan",
+                            "status": "completed",
+                            "label": "Execution Plan",
+                            "details": f"Generated {len(plan_steps)} steps",
+                            "steps": plan_steps,
+                            "timestamp": ts,
+                            **trace_fields,
+                            "raw": {"steps": plan_steps},
+                        })
 
                 if kind == "on_chain_end" and node == "execute":
                     raw_output = ev.get("data", {}).get("output", {})
@@ -1607,6 +2529,25 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                         step_counts[parent] = step_num
                         tc_names = _tool_call_names(tool_calls)
                         yield f"event: thinking\ndata: {json.dumps({'type': 'reasoning', 'thinking': f'Step {step_num}: Planning - {tc_names}', 'step': step_num, 'timestamp': ts})}\n\n"
+                        await _push(run_id, {
+                            "nodeId": node,
+                            "event_type": "reasoning",
+                            "status": "completed",
+                            "label": f"Step {step_num}: Planning",
+                            "details": f"Planned {len(tool_calls)} tool call{'s' if len(tool_calls) != 1 else ''}: {tc_names}",
+                            "parent_node": parent if parent != node else None,
+                            "step": step_num,
+                            "timestamp": ts,
+                            **trace_fields,
+                            "raw": {
+                                "node": node,
+                                "step": step_num,
+                                "tool_calls": [
+                                    (tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "?"))
+                                    for tc in tool_calls
+                                ],
+                            },
+                        })
                     elif content:
                         # Some providers do not emit token chunks for every model end event.
                         # Emit a synthetic chunk so clients always receive visible answer text.
@@ -1616,6 +2557,22 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                         step_counts[parent] = step_num
                         preview = content[:120].replace("\n", " ")
                         yield f"event: thinking\ndata: {json.dumps({'type': 'synthesis', 'thinking': f'Step {step_num}: Synthesizing response', 'result': preview, 'step': step_num, 'timestamp': ts})}\n\n"
+                        await _push(run_id, {
+                            "nodeId": node,
+                            "event_type": "reasoning",
+                            "status": "completed",
+                            "label": f"Step {step_num}: Synthesis",
+                            "details": f"Final answer: {preview}{'…' if len(content) > 120 else ''}",
+                            "parent_node": parent if parent != node else None,
+                            "step": step_num,
+                            "timestamp": ts,
+                            **trace_fields,
+                            "raw": {
+                                "node": node,
+                                "step": step_num,
+                                "preview": preview,
+                            },
+                        })
 
                 # ── Tool start ───────────────────────────────────────────────
                 elif kind == "on_tool_start":
@@ -1634,6 +2591,7 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                         "tool_input": tool_input,
                         "parent_node": current_specialist or "general",
                         "timestamp": ts,
+                        **trace_fields,
                         "raw": {"tool": tool_name, "input": tool_input},
                     })
 
@@ -1657,6 +2615,7 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                         "duration_ms": duration_ms,
                         "parent_node": current_specialist or "general",
                         "timestamp": ts,
+                        **trace_fields,
                         "raw": {"tool": tool_name, "output": output_preview[:200]},
                     })
 
@@ -1671,6 +2630,7 @@ async def stream_chat(request: Request, input: str = "", session_id: str = ""):
                         "details": f"Completed in {duration_ms}ms",
                         "duration_ms": duration_ms,
                         "timestamp": ts,
+                        **trace_fields,
                         "raw": {},
                     })
                     active_nodes.discard(node)
@@ -1806,6 +2766,649 @@ async def chat_endpoint(request: Request):
             active_graph_runs -= 1
         graph_run_semaphore.release()
         mcp_module.clear_request_context()
+
+
+async def _wait_for_run_completion(run_id: str, timeout_seconds: float = 60.0, poll_interval: float = 0.2) -> Dict[str, Any]:
+    deadline = time.time() + max(timeout_seconds, 0.1)
+    while time.time() < deadline:
+        run = await deployment_store.get_run(run_id)
+        if not run:
+            return {"error": "Run not found", "run_id": run_id}
+        if str(run.get("status", "")).lower() in TERMINAL_RUN_STATUSES:
+            return run
+        await asyncio.sleep(poll_interval)
+
+    run = await deployment_store.get_run(run_id)
+    if run:
+        run["timed_out"] = True
+        run["timeout_seconds"] = timeout_seconds
+        return run
+    return {"error": "Run not found", "run_id": run_id}
+
+
+# ── Deployment Runtime Endpoints (Assistants/Threads/Runs/Crons) ─────────────
+
+
+@app.get("/api/deployment/status")
+async def deployment_runtime_status(request: Request):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(request, "/system/info")
+
+    return JSONResponse(
+        {
+            "mode": DEPLOYMENT_RUNTIME_MODE,
+            "proxy_configured": bool(DEPLOYMENT_PROXY_URL),
+            "proxy_url": DEPLOYMENT_PROXY_URL or None,
+            "state_file": DEPLOYMENT_STATE_FILE,
+            "assistants": len(deployment_store.assistants),
+            "threads": len(deployment_store.threads),
+            "runs": len(deployment_store.runs),
+            "crons": len(deployment_store.crons),
+            "background_runs": len(background_run_tasks),
+            "cron_scheduler_active": deployment_scheduler is not None,
+            "features": {
+                "assistants": True,
+                "threads": True,
+                "thread_runs": True,
+                "stateless_runs": True,
+                "crons": True,
+                "streaming": True,
+                "durable_local_state": True,
+                "proxy_to_langsmith_agent_server": bool(DEPLOYMENT_PROXY_URL),
+            },
+            "timestamp": _now_iso(),
+        }
+    )
+
+
+@app.api_route(
+    "/api/deployment/proxy/{upstream_path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+async def deployment_proxy_passthrough(request: Request, upstream_path: str):
+    body: Optional[Dict[str, Any]] = None
+    if request.method in ("POST", "PUT", "PATCH"):
+        try:
+            payload = await request.json()
+            if isinstance(payload, dict):
+                body = payload
+        except Exception:
+            body = None
+    return await _proxy_deployment_request(
+        request,
+        f"/{upstream_path}",
+        payload=body,
+        params=dict(request.query_params),
+    )
+
+
+@app.post("/api/deployment/assistants/search")
+async def deployment_search_assistants(request: Request):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, "/assistants/search", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    metadata = data.get("metadata") if isinstance(data, dict) and isinstance(data.get("metadata"), dict) else None
+    limit = int(data.get("limit", 10)) if isinstance(data, dict) else 10
+    offset = int(data.get("offset", 0)) if isinstance(data, dict) else 0
+    rows = await deployment_store.search_assistants(metadata=metadata, limit=max(1, min(limit, 200)), offset=max(0, offset))
+    return JSONResponse({"assistants": rows, "limit": limit, "offset": offset})
+
+
+@app.post("/api/deployment/assistants/count")
+async def deployment_count_assistants(request: Request):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, "/assistants/count", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    metadata = data.get("metadata") if isinstance(data, dict) and isinstance(data.get("metadata"), dict) else None
+    count = await deployment_store.count_assistants(metadata=metadata)
+    return JSONResponse({"count": count})
+
+
+@app.post("/api/deployment/assistants")
+async def deployment_create_assistant(request: Request):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, "/assistants", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    try:
+        assistant = await deployment_store.create_assistant(
+            name=str(data.get("name") or "").strip(),
+            graph_id=str(data.get("graph_id") or "agent").strip() or "agent",
+            config=data.get("config") if isinstance(data.get("config"), dict) else {},
+            metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
+            description=str(data.get("description") or "").strip(),
+            assistant_id=str(data.get("assistant_id") or "").strip(),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+
+    return JSONResponse(assistant, status_code=201)
+
+
+@app.get("/api/deployment/assistants/{assistant_id}")
+async def deployment_get_assistant(request: Request, assistant_id: str):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(request, f"/assistants/{assistant_id}")
+
+    assistant = await deployment_store.get_assistant(assistant_id)
+    if not assistant:
+        return JSONResponse({"error": "Assistant not found"}, status_code=404)
+    return JSONResponse(assistant)
+
+
+@app.patch("/api/deployment/assistants/{assistant_id}")
+async def deployment_patch_assistant(request: Request, assistant_id: str):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, f"/assistants/{assistant_id}", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    assistant = await deployment_store.patch_assistant(
+        assistant_id,
+        name=data.get("name") if "name" in data else None,
+        description=data.get("description") if "description" in data else None,
+        config=data.get("config") if "config" in data and isinstance(data.get("config"), dict) else None,
+        metadata=data.get("metadata") if "metadata" in data and isinstance(data.get("metadata"), dict) else None,
+    )
+    if not assistant:
+        return JSONResponse({"error": "Assistant not found"}, status_code=404)
+    return JSONResponse(assistant)
+
+
+@app.delete("/api/deployment/assistants/{assistant_id}")
+async def deployment_delete_assistant(request: Request, assistant_id: str):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(request, f"/assistants/{assistant_id}")
+
+    deleted = await deployment_store.delete_assistant(assistant_id)
+    if not deleted:
+        return JSONResponse({"error": "Assistant not found or protected default assistant"}, status_code=404)
+    return JSONResponse({"deleted": True, "assistant_id": assistant_id})
+
+
+@app.post("/api/deployment/threads")
+async def deployment_create_thread(request: Request):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, "/threads", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        thread = await deployment_store.create_thread(
+            metadata=data.get("metadata") if isinstance(data.get("metadata"), dict) else {},
+            config=data.get("config") if isinstance(data.get("config"), dict) else {},
+            values=data.get("values"),
+            thread_id=str(data.get("thread_id") or "").strip(),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    return JSONResponse(thread, status_code=201)
+
+
+@app.post("/api/deployment/threads/search")
+async def deployment_search_threads(request: Request):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, "/threads/search", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    metadata = data.get("metadata") if isinstance(data, dict) and isinstance(data.get("metadata"), dict) else None
+    limit = int(data.get("limit", 10)) if isinstance(data, dict) else 10
+    offset = int(data.get("offset", 0)) if isinstance(data, dict) else 0
+    rows = await deployment_store.search_threads(metadata=metadata, limit=max(1, min(limit, 200)), offset=max(0, offset))
+    return JSONResponse({"threads": rows, "limit": limit, "offset": offset})
+
+
+@app.post("/api/deployment/threads/count")
+async def deployment_count_threads(request: Request):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, "/threads/count", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    metadata = data.get("metadata") if isinstance(data, dict) and isinstance(data.get("metadata"), dict) else None
+    count = await deployment_store.count_threads(metadata=metadata)
+    return JSONResponse({"count": count})
+
+
+@app.get("/api/deployment/threads/{thread_id}")
+async def deployment_get_thread(request: Request, thread_id: str):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(request, f"/threads/{thread_id}")
+
+    thread = await deployment_store.get_thread(thread_id)
+    if not thread:
+        return JSONResponse({"error": "Thread not found"}, status_code=404)
+    return JSONResponse(thread)
+
+
+@app.get("/api/deployment/threads/{thread_id}/state")
+async def deployment_get_thread_state(request: Request, thread_id: str):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(request, f"/threads/{thread_id}/state")
+
+    thread = await deployment_store.get_thread(thread_id)
+    if not thread:
+        return JSONResponse({"error": "Thread not found"}, status_code=404)
+
+    runs = await deployment_store.list_runs(thread_id, limit=50, offset=0)
+    return JSONResponse(
+        {
+            "thread_id": thread_id,
+            "status": thread.get("status", "idle"),
+            "messages": thread.get("messages", []),
+            "metadata": thread.get("metadata", {}),
+            "runs": runs,
+            "updated_at": thread.get("updated_at"),
+        }
+    )
+
+
+@app.patch("/api/deployment/threads/{thread_id}")
+async def deployment_patch_thread(request: Request, thread_id: str):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, f"/threads/{thread_id}", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+    thread = await deployment_store.patch_thread(
+        thread_id,
+        metadata=data.get("metadata") if "metadata" in data and isinstance(data.get("metadata"), dict) else None,
+        config=data.get("config") if "config" in data and isinstance(data.get("config"), dict) else None,
+        values=data.get("values") if "values" in data else None,
+    )
+    if not thread:
+        return JSONResponse({"error": "Thread not found"}, status_code=404)
+    return JSONResponse(thread)
+
+
+@app.delete("/api/deployment/threads/{thread_id}")
+async def deployment_delete_thread(request: Request, thread_id: str):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(request, f"/threads/{thread_id}")
+
+    deleted = await deployment_store.delete_thread(thread_id)
+    if not deleted:
+        return JSONResponse({"error": "Thread not found"}, status_code=404)
+    return JSONResponse({"deleted": True, "thread_id": thread_id})
+
+
+@app.post("/api/deployment/threads/{thread_id}/runs/background")
+async def deployment_create_thread_background_run(request: Request, thread_id: str):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(
+            request,
+            f"/threads/{thread_id}/runs",
+            payload=payload if isinstance(payload, dict) else {},
+        )
+
+    data = await request.json()
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    normalized_input = _normalize_run_input(data)
+    assistant_ref = str(data.get("assistant_id") or data.get("graph_id") or "agent")
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+
+    run, error = await _start_deployment_background_run(
+        thread_id=thread_id,
+        assistant_ref=assistant_ref,
+        input_payload=normalized_input,
+        metadata=metadata,
+        mode="background",
+    )
+    if error:
+        return error
+
+    run_id = str(run.get("run_id", ""))
+    return JSONResponse(
+        {
+            **run,
+            "stream_url": f"/api/deployment/threads/{thread_id}/runs/{run_id}/stream",
+            "join_url": f"/api/deployment/threads/{thread_id}/runs/{run_id}/join",
+        },
+        status_code=202,
+    )
+
+
+@app.post("/api/deployment/threads/{thread_id}/runs/wait")
+async def deployment_create_thread_wait_run(request: Request, thread_id: str):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(
+            request,
+            f"/threads/{thread_id}/runs/wait",
+            payload=payload if isinstance(payload, dict) else {},
+        )
+
+    data = await request.json()
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    normalized_input = _normalize_run_input(data)
+    assistant_ref = str(data.get("assistant_id") or data.get("graph_id") or "agent")
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    timeout_seconds = float(data.get("timeout_seconds", 120.0))
+
+    run, error = await _start_deployment_background_run(
+        thread_id=thread_id,
+        assistant_ref=assistant_ref,
+        input_payload=normalized_input,
+        metadata=metadata,
+        mode="wait",
+    )
+    if error:
+        return error
+
+    run_id = str(run.get("run_id", ""))
+    completed = await _wait_for_run_completion(run_id, timeout_seconds=timeout_seconds)
+    return JSONResponse(completed)
+
+
+@app.get("/api/deployment/threads/{thread_id}/runs")
+async def deployment_list_thread_runs(request: Request, thread_id: str, limit: int = 20, offset: int = 0):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(
+            request,
+            f"/threads/{thread_id}/runs",
+            params={"limit": limit, "offset": offset},
+        )
+
+    runs = await deployment_store.list_runs(thread_id, limit=max(1, min(limit, 200)), offset=max(0, offset))
+    return JSONResponse({"runs": runs, "thread_id": thread_id, "limit": limit, "offset": offset})
+
+
+@app.get("/api/deployment/threads/{thread_id}/runs/{run_id}")
+async def deployment_get_run(request: Request, thread_id: str, run_id: str):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(request, f"/threads/{thread_id}/runs/{run_id}")
+
+    run = await deployment_store.get_run(run_id)
+    if not run or str(run.get("thread_id")) != thread_id:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+    return JSONResponse(run)
+
+
+@app.get("/api/deployment/threads/{thread_id}/runs/{run_id}/join")
+async def deployment_join_run(request: Request, thread_id: str, run_id: str, timeout_seconds: float = 120.0):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(
+            request,
+            f"/threads/{thread_id}/runs/{run_id}/join",
+            params={"timeout_seconds": timeout_seconds},
+        )
+
+    run = await deployment_store.get_run(run_id)
+    if not run or str(run.get("thread_id")) != thread_id:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+
+    completed = await _wait_for_run_completion(run_id, timeout_seconds=timeout_seconds)
+    return JSONResponse(completed)
+
+
+@app.get("/api/deployment/threads/{thread_id}/runs/{run_id}/stream")
+async def deployment_stream_run_events(request: Request, thread_id: str, run_id: str):
+    if _deployment_proxy_enabled(request):
+        return JSONResponse(
+            {
+                "error": "Streaming proxy mode is not supported via JSON proxy helper",
+                "details": "Use /api/deployment/proxy/... directly with a streaming-capable client.",
+            },
+            status_code=501,
+        )
+    return await stream_events(request=request, session_id=thread_id, run_id=run_id)
+
+
+@app.post("/api/deployment/threads/{thread_id}/runs/{run_id}/cancel")
+async def deployment_cancel_run(request: Request, thread_id: str, run_id: str):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(request, f"/threads/{thread_id}/runs/{run_id}/cancel")
+
+    run = await deployment_store.get_run(run_id)
+    if not run or str(run.get("thread_id")) != thread_id:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+
+    task = background_run_tasks.get(run_id)
+    if task and not task.done():
+        task.cancel()
+    else:
+        await deployment_store.update_run(run_id, status="cancelled", error="Run cancelled by user")
+        await _push(run_id, {"__done__": True})
+
+    cancelled = await deployment_store.get_run(run_id)
+    return JSONResponse(cancelled or {"run_id": run_id, "status": "cancelled"})
+
+
+@app.post("/api/deployment/runs/background")
+async def deployment_create_stateless_background_run(request: Request):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, "/runs", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    thread = await deployment_store.create_thread(
+        metadata={"created_by": "stateless_run"},
+        config={},
+        values=None,
+    )
+    thread_id = str(thread.get("thread_id", ""))
+
+    normalized_input = _normalize_run_input(data)
+    assistant_ref = str(data.get("assistant_id") or data.get("graph_id") or "agent")
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    on_run_completed = str(data.get("on_run_completed", "delete")).lower()
+    cleanup_thread = on_run_completed != "keep"
+
+    run, error = await _start_deployment_background_run(
+        thread_id=thread_id,
+        assistant_ref=assistant_ref,
+        input_payload=normalized_input,
+        metadata=metadata,
+        mode="stateless_background",
+        cleanup_thread_on_complete=cleanup_thread,
+    )
+    if error:
+        return error
+
+    return JSONResponse({**run, "thread_id": thread_id}, status_code=202)
+
+
+@app.post("/api/deployment/runs/wait")
+async def deployment_create_stateless_wait_run(request: Request):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, "/runs/wait", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    thread = await deployment_store.create_thread(
+        metadata={"created_by": "stateless_run"},
+        config={},
+        values=None,
+    )
+    thread_id = str(thread.get("thread_id", ""))
+
+    normalized_input = _normalize_run_input(data)
+    assistant_ref = str(data.get("assistant_id") or data.get("graph_id") or "agent")
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    timeout_seconds = float(data.get("timeout_seconds", 120.0))
+    on_run_completed = str(data.get("on_run_completed", "delete")).lower()
+
+    run, error = await _start_deployment_background_run(
+        thread_id=thread_id,
+        assistant_ref=assistant_ref,
+        input_payload=normalized_input,
+        metadata=metadata,
+        mode="stateless_wait",
+        cleanup_thread_on_complete=on_run_completed != "keep",
+    )
+    if error:
+        return error
+
+    completed = await _wait_for_run_completion(str(run.get("run_id", "")), timeout_seconds=timeout_seconds)
+    completed["thread_id"] = thread_id
+    return JSONResponse(completed)
+
+
+@app.post("/api/deployment/crons")
+async def deployment_create_cron(request: Request):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, "/crons", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    assistant_ref = str(data.get("assistant_id") or data.get("graph_id") or "agent").strip() or "agent"
+    assistant = await deployment_store.resolve_assistant(assistant_ref)
+    if not assistant:
+        return JSONResponse({"error": f"Assistant not found: {assistant_ref}"}, status_code=404)
+
+    schedule = str(data.get("schedule") or "").strip()
+    if not schedule:
+        return JSONResponse({"error": "schedule is required"}, status_code=400)
+    if CronTrigger is None:
+        return JSONResponse({"error": "Cron scheduler support unavailable"}, status_code=503)
+    try:
+        CronTrigger.from_crontab(schedule, timezone=timezone.utc)
+    except Exception as e:
+        return JSONResponse({"error": f"Invalid cron schedule: {e}"}, status_code=400)
+
+    input_payload = _normalize_run_input(data)
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    on_run_completed = str(data.get("on_run_completed", "delete")).lower()
+
+    thread_id = ""
+    if str(data.get("thread_id") or "").strip():
+        thread_id = str(data.get("thread_id")).strip()
+        if not await deployment_store.get_thread(thread_id):
+            return JSONResponse({"error": f"Thread not found: {thread_id}"}, status_code=404)
+
+    try:
+        cron = await deployment_store.create_cron(
+            assistant_id=str(assistant.get("assistant_id", "")),
+            schedule=schedule,
+            input_payload=input_payload,
+            thread_id=thread_id,
+            metadata=metadata,
+            on_run_completed=on_run_completed,
+            cron_id=str(data.get("cron_id") or "").strip(),
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+
+    await _register_deployment_cron_job(cron)
+    resolved = await deployment_store.get_cron(str(cron.get("cron_id", "")))
+    return JSONResponse(resolved or cron, status_code=201)
+
+
+@app.get("/api/deployment/crons/{cron_id}")
+async def deployment_get_cron(request: Request, cron_id: str):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(request, f"/crons/{cron_id}")
+
+    cron = await deployment_store.get_cron(cron_id)
+    if not cron:
+        return JSONResponse({"error": "Cron not found"}, status_code=404)
+    return JSONResponse(cron)
+
+
+@app.post("/api/deployment/crons/search")
+async def deployment_search_crons(request: Request):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, "/crons/search", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    metadata = data.get("metadata") if isinstance(data, dict) and isinstance(data.get("metadata"), dict) else None
+    limit = int(data.get("limit", 20)) if isinstance(data, dict) else 20
+    offset = int(data.get("offset", 0)) if isinstance(data, dict) else 0
+    rows = await deployment_store.search_crons(metadata=metadata, limit=max(1, min(limit, 200)), offset=max(0, offset))
+    return JSONResponse({"crons": rows, "limit": limit, "offset": offset})
+
+
+@app.post("/api/deployment/crons/count")
+async def deployment_count_crons(request: Request):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, "/crons/count", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    metadata = data.get("metadata") if isinstance(data, dict) and isinstance(data.get("metadata"), dict) else None
+    count = await deployment_store.count_crons(metadata=metadata)
+    return JSONResponse({"count": count})
+
+
+@app.patch("/api/deployment/crons/{cron_id}")
+async def deployment_patch_cron(request: Request, cron_id: str):
+    if _deployment_proxy_enabled(request):
+        payload = await request.json()
+        return await _proxy_deployment_request(request, f"/crons/{cron_id}", payload=payload if isinstance(payload, dict) else {})
+
+    data = await request.json()
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    if "schedule" in data and data.get("schedule") is not None:
+        if CronTrigger is None:
+            return JSONResponse({"error": "Cron scheduler support unavailable"}, status_code=503)
+        try:
+            CronTrigger.from_crontab(str(data.get("schedule")).strip(), timezone=timezone.utc)
+        except Exception as e:
+            return JSONResponse({"error": f"Invalid cron schedule: {e}"}, status_code=400)
+
+    updated = await deployment_store.update_cron(
+        cron_id,
+        schedule=str(data.get("schedule")).strip() if "schedule" in data and data.get("schedule") is not None else None,
+        input_payload=_normalize_run_input(data) if "input" in data or "messages" in data else None,
+        metadata=data.get("metadata") if "metadata" in data and isinstance(data.get("metadata"), dict) else None,
+        active=bool(data.get("active")) if "active" in data else None,
+        on_run_completed=str(data.get("on_run_completed")).lower() if "on_run_completed" in data else None,
+    )
+    if not updated:
+        return JSONResponse({"error": "Cron not found"}, status_code=404)
+
+    if updated.get("active"):
+        await _register_deployment_cron_job(updated)
+    else:
+        await _remove_deployment_cron_job(cron_id)
+
+    resolved = await deployment_store.get_cron(cron_id)
+    return JSONResponse(resolved or updated)
+
+
+@app.delete("/api/deployment/crons/{cron_id}")
+async def deployment_delete_cron(request: Request, cron_id: str):
+    if _deployment_proxy_enabled(request):
+        return await _proxy_deployment_request(request, f"/crons/{cron_id}")
+
+    await _remove_deployment_cron_job(cron_id)
+    deleted = await deployment_store.delete_cron(cron_id)
+    if not deleted:
+        return JSONResponse({"error": "Cron not found"}, status_code=404)
+    return JSONResponse({"deleted": True, "cron_id": cron_id})
 
 
 # ── Knowledge Graph / Document Ingestion Endpoints ────────────────────────────
@@ -2381,17 +3984,18 @@ async def invalidate_knowledge_cache():
         )
 
 
-# ── Langfuse Observability Endpoints ──────────────────────────────────────────
+# ── LangSmith Observability Endpoints ─────────────────────────────────────────
 
 
 @app.post("/api/feedback")
 async def submit_feedback(request: Request):
     """
-    Submit user feedback as a Langfuse score.
+    Submit user feedback as LangSmith feedback.
 
     Body:
         {
-            "trace_id": "abc123...",
+            "run_id": "2f3a2f5f-...",
+            "trace_id": "abc123...",  # optional, helps LangSmith batched ingestion
             "session_id": "user-session-id",
             "score": 5,              # 1-5 rating
             "feedback_type": "user-rating",  # e.g., "user-rating", "relevance", "helpfulness"
@@ -2403,15 +4007,16 @@ async def submit_feedback(request: Request):
     """
     try:
         data = await request.json()
-        trace_id = data.get("trace_id")
+        run_id = str(data.get("run_id") or data.get("trace_id") or "").strip()
+        trace_id = str(data.get("trace_id") or "").strip() or None
         session_id = data.get("session_id", "unknown")
         score = data.get("score", 0)
         feedback_type = data.get("feedback_type", "user-rating")
         comment = data.get("comment", "")
 
-        if not trace_id:
+        if not run_id:
             return JSONResponse(
-                {"success": False, "error": "trace_id required"},
+                {"success": False, "error": "run_id required"},
                 status_code=400,
             )
 
@@ -2421,23 +4026,23 @@ async def submit_feedback(request: Request):
                 status_code=400,
             )
 
-        success = _score_trace(
-            trace_id=trace_id,
-            name=feedback_type,
-            value=float(score),
-            data_type="NUMERIC",
+        success = _create_feedback(
+            run_id=run_id,
+            key=feedback_type,
+            score=float(score),
             comment=comment,
+            trace_id=trace_id,
         )
 
         if success:
             logger.info(
-                "Feedback recorded: trace=%s, score=%s, type=%s",
-                trace_id[:8], score, feedback_type
+                "Feedback recorded: run=%s, score=%s, type=%s, session=%s",
+                run_id[:8], score, feedback_type, session_id
             )
             return JSONResponse({"success": True})
         else:
             return JSONResponse(
-                {"success": False, "error": "Langfuse not enabled or scoring failed"},
+                {"success": False, "error": "LangSmith not enabled or feedback submission failed"},
                 status_code=503,
             )
 
@@ -2452,19 +4057,25 @@ async def submit_feedback(request: Request):
 @app.get("/api/observability/status")
 async def observability_status():
     """
-    Check Langfuse observability status.
+    Check LangSmith observability status.
 
     Returns:
         {
-            "langfuse_enabled": true/false,
-            "host": "https://cloud.langfuse.com",
+            "langsmith_enabled": true/false,
+            "endpoint": "https://api.smith.langchain.com",
             "features": ["tracing", "scoring"]
         }
     """
     return JSONResponse({
-        "langfuse_enabled": _langfuse_enabled,
-        "host": os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com") if _langfuse_enabled else None,
-        "features": ["tracing", "scoring", "session_tracking"] if _langfuse_enabled else [],
+        "langsmith_enabled": _langsmith_enabled,
+        "endpoint": _langsmith_endpoint(),
+        "project": _langsmith_project(),
+        "ui_url": _langsmith_ui_base(),
+        "dashboard_url": _langsmith_dashboard_url(),
+        "tracing_middleware_enabled": _langsmith_tracing_middleware_enabled,
+        "reason": _langsmith_status_reason,
+        "last_error": _langsmith_last_error or None,
+        "features": ["tracing", "feedback", "session_tracking"] if _langsmith_enabled else [],
         "runtime": _runtime_stats(),
     })
 

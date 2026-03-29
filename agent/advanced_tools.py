@@ -229,15 +229,22 @@ class ToolComposer:
 
 
 HEALING_PROMPT = """\
-A tool call failed with an error. Your job is to fix the parameters so it works.
+A tool call failed. Your job is to correct parameters so the next tool call has a high chance to succeed.
 
 Tool: {tool_name}
 Description: {tool_description}
 Parameters: {params}
 Error: {error}
 
-Analyze the error and suggest corrected parameters. Reply with a JSON object of \
-the corrected parameters ONLY. Do not include any explanation.
+Correction rules:
+- Preserve the same parameter schema unless the error clearly indicates a required change.
+- Keep values realistic and tool-compatible (e.g., valid ICAO format, valid coordinate ranges).
+- Do not add explanatory text or markdown.
+- If no reliable fix is possible, return the original parameters unchanged.
+
+Output contract:
+- Reply with a single valid JSON object representing corrected parameters only.
+- No prose, no code fences, no comments.
 
 Example:
 Original params: {{"icao": "heathrow"}}

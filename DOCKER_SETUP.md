@@ -7,7 +7,7 @@ This guide is the complete Docker-based setup for this project, including:
 - Moving data to a larger drive
 - Backup and restore
 
-If you want the full stack (Langfuse + cognee + Neo4j + Apache AGE), jump to section 2.4.
+If you want the full stack (LangSmith + cognee + Neo4j + Apache AGE), jump to section 2.4.
 
 ---
 
@@ -106,7 +106,7 @@ docker compose --profile dev up -d
 
 Then open `http://localhost:8080`.
 
-### 2.4 Full Stack Setup (Langfuse + cognee + Neo4j + Apache AGE)
+### 2.4 Full Stack Setup (LangSmith + cognee + Neo4j + Apache AGE)
 
 Use this when you want all optional capabilities enabled.
 
@@ -133,9 +133,10 @@ NEO4J_URI=bolt://neo4j:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=change_to_a_strong_neo4j_password
 
-# Langfuse tracing (optional but recommended)
-LANGFUSE_PUBLIC_KEY=pk-...
-LANGFUSE_SECRET_KEY=sk-...
+# LangSmith tracing (optional but recommended)
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=ls-...
+# LANGSMITH_PROJECT=default
 ```
 
 1. Build AGE-enabled Postgres image:
@@ -173,7 +174,7 @@ Expected:
 
 Notes:
 
-- Langfuse in this stack is configured as external SaaS/self-hosted endpoint via API keys in `agent`; this compose file does not run a Langfuse server container.
+- LangSmith in this stack is configured as an external service via API key in `agent`; this compose file does not run a LangSmith server container.
 - If `NEO4J_PASSWORD` is unset, cognee still runs with vector storage but graph-store enhancement is disabled.
 
 ---

@@ -31,6 +31,12 @@ import hashlib
 import httpx
 from urllib.parse import urlparse
 
+try:
+    from langsmith.run_helpers import get_current_run_tree
+except Exception:  # pragma: no cover - optional dependency handling
+    def get_current_run_tree():
+        return None
+
 logger = logging.getLogger(__name__)
 
 def _normalize_base_url(base_url: str) -> str:
@@ -208,6 +214,15 @@ async def embed_text(text: str) -> list[float]:
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             }
+
+            # Propagate distributed tracing headers when this call occurs inside
+            # an active LangSmith span.
+            run_tree = get_current_run_tree()
+            if run_tree and hasattr(run_tree, "to_headers"):
+                try:
+                    headers.update(run_tree.to_headers() or {})
+                except Exception:
+                    pass
 
             try:
                 async with httpx.AsyncClient(timeout=30) as http_client:

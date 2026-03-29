@@ -49,7 +49,7 @@ dependencies = [
     "hiredis>=2.3.0",
 
     # Observability
-    "langfuse>=4.0.0",
+    "langsmith>=0.3.13",
 
     # Utilities
     "python-dotenv>=1.0.0",

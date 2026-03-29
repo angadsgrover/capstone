@@ -6,7 +6,6 @@ import { cn } from '@/lib/utils'
 const NAV_ITEMS = [
   { label: 'Agent',          path: '/chat',     icon: 'chat_bubble',     short: '1' },
   { label: 'Logs',           path: '/logs',     icon: 'terminal',        short: '2' },
-  { label: 'Visuals',        path: '/visuals',  icon: 'monitoring',      short: '3' },
 ]
 
 interface AppShellProps {
@@ -170,15 +169,15 @@ export default function AppShell({ children }: AppShellProps) {
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
         <header className={cn(
-          "flex items-center justify-between h-16 px-8 flex-shrink-0",
+          "flex items-center justify-between h-14 px-4 sm:h-16 sm:px-6 md:px-8 flex-shrink-0",
           "bg-background/80 backdrop-blur-xl",
           "bg-gradient-to-b from-surface-container-low to-transparent"
         )}>
-          <div className="flex items-center gap-6">
-            <span className="text-base font-bold tracking-tight text-primary">
+          <div className="flex min-w-0 items-center gap-3 sm:gap-6">
+            <span className="truncate text-sm font-bold tracking-tight text-primary sm:text-base">
               PolyU Aviation Weather Intelligence
             </span>
-            <div className="h-4 w-[1px] bg-outline-variant/30"></div>
+            <div className="hidden h-4 w-[1px] bg-outline-variant/30 sm:block"></div>
             <div className="flex items-center gap-2 text-secondary text-xs font-medium uppercase tracking-wider">
               <span className="w-2 h-2 rounded-full bg-secondary animate-pulse shadow-glow-secondary"></span>
               Live

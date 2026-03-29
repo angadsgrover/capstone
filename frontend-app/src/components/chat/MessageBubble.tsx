@@ -4,6 +4,7 @@ import MaterialIcon from '@/components/ui/MaterialIcon'
 import { Message } from '@/shared/types/agent'
 import ToolCallsSection from './ToolCallsSection'
 import ThinkingSection from './ThinkingSection'
+import LLMThinkingOutputSection from './LLMThinkingOutputSection'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 
@@ -28,7 +29,7 @@ export default function MessageBubble({ message, isStreaming }: MessageBubblePro
       isUser ? "justify-end" : "justify-start"
     )}>
       <div className={cn(
-        "max-w-[85%] md:max-w-[75%] flex gap-4",
+        "max-w-[92%] sm:max-w-[88%] md:max-w-[75%] flex gap-3 sm:gap-4",
         isUser ? "flex-row-reverse" : "flex-row"
       )}>
 
@@ -84,6 +85,11 @@ export default function MessageBubble({ message, isStreaming }: MessageBubblePro
                       plan={message.plan}
                       route={message.route}
                     />
+
+                    {/* Raw LLM thinking output */}
+                    {message.thinking && message.thinking.length > 0 && (
+                      <LLMThinkingOutputSection thinking={message.thinking} />
+                    )}
 
                     {/* Tool calls */}
                     {message.toolCalls && message.toolCalls.length > 0 && (

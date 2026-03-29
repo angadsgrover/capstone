@@ -40,6 +40,22 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import create_react_agent
 
+try:
+    from langsmith import traceable
+    from langsmith.run_helpers import get_current_run_tree
+except Exception:  # pragma: no cover - safe no-op fallback when langsmith unavailable
+    def traceable(*args, **kwargs):
+        if args and callable(args[0]) and len(args) == 1 and not kwargs:
+            return args[0]
+
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
+    def get_current_run_tree():
+        return None
+
 import mcp_client as mcp_module
 
 # Optional imports for advanced features
@@ -157,16 +173,45 @@ def _resolve_llm_config(runtime_config: RunnableConfig) -> Dict[str, str]:
 
     raw_configurable = runtime_config.get("configurable", {})
     configurable = raw_configurable if isinstance(raw_configurable, dict) else {}
+    session_id = configurable.get("thread_id") or configurable.get("session_id") or ""
     return {
         "model": configurable.get("model") or os.getenv("MODEL_CHOICE", "openai/gpt-4o-mini"),
         "base_url": configurable.get("base_url") or os.getenv("BASE_URL", "https://openrouter.ai/api/v1"),
         "api_key": configurable.get("api_key") or os.getenv("LLM_API_KEY", ""),
+        "session_id": session_id,
     }
+
+
+def _annotate_thread_metadata(config: RunnableConfig) -> None:
+    if not isinstance(config, dict):
+        return
+    configurable = config.get("configurable", {})
+    if not isinstance(configurable, dict):
+        return
+    thread_id = str(configurable.get("thread_id") or configurable.get("session_id") or "").strip()
+    if not thread_id:
+        return
+
+    run_tree = get_current_run_tree()
+    if not run_tree:
+        return
+
+    try:
+        metadata = dict(getattr(run_tree, "metadata", {}) or {})
+        metadata["session_id"] = thread_id
+        metadata["thread_id"] = thread_id
+        metadata["conversation_id"] = thread_id
+        run_tree.metadata = metadata
+    except Exception:
+        return
 
 # ── System prompts ────────────────────────────────────────────────────────────
 
 ROUTER_PROMPT = """\
-You are a query router. Classify the query into EXACTLY ONE category:
+You are a strict query router for an aviation intelligence system.
+
+Task:
+Classify the user query into EXACTLY ONE category:
 
 aviation_weather — METAR, TAF, PIREPs, AIRMETs, VFR/IFR conditions, route weather, airport weather briefings
 hk_weather       — Hong Kong weather, HKO forecasts, HK typhoon/rainstorm warnings, HK visibility
@@ -174,16 +219,30 @@ aircraft         — live flight tracking, ADS-B positions, callsign/registratio
 planning         — complex queries requiring multiple steps, comparisons between airports, or sequential operations
 general          — mixed queries, comparisons across multiple domains, or anything that doesn't fit above
 
-Use 'planning' for queries that:
+Routing rules:
+- Use planning when the user asks for comparisons, trade-offs, ranking, or sequential analysis.
 - Compare multiple airports or locations
 - Ask for sequential analysis (first X, then Y)
 - Require combining data from multiple sources
 - Use words like "compare", "both", "versus", "best", "optimal"
+- Prefer aviation_weather over hk_weather when the query is airport/flight-weather specific (e.g., METAR/TAF/flight category).
+- Prefer aircraft when the query is about live traffic, callsigns, registrations, or flight movement.
+- Use general only when none of the above clearly apply.
 
-Reply with ONLY the category name. No explanation, no punctuation, no extra words."""
+Output format:
+- Reply with ONLY one token: aviation_weather | hk_weather | aircraft | planning | general
+- No explanation, no punctuation, no extra words."""
 
 AVIATION_PROMPT = """\
-You are an aviation weather specialist. Provide clear, actionable briefings for pilots.
+You are an aviation weather specialist.
+
+Goal:
+Provide a clear, operationally useful briefing for pilots and dispatch users.
+
+Hard rules:
+- Do not invent weather observations or forecasts.
+- If required data is missing/unavailable, say so explicitly and provide a safe fallback recommendation.
+- Keep statements tied to tool outputs and timestamps.
 
 **Workflow:**
 1. **Resolve location** → If user gives a city/airport name (not ICAO), call `lookup_airport_codes` first
@@ -201,7 +260,7 @@ You are an aviation weather specialist. Provide clear, actionable briefings for 
 **Format:**
 - Start with executive summary (1-2 sentences)
 - Use headers: ## Current Conditions, ## Forecast, ## Recommendations
-- Include data sources and timestamps
+- Include data sources and timestamps; if stale/unknown, label it
 - Highlight critical weather (bold or ⚠️)"""
 
 HK_PROMPT = """\
@@ -209,6 +268,10 @@ You are a Hong Kong weather specialist with HKO data expertise.
 
 **Important:** HKO tools provide civic weather, NOT aviation METAR/TAF.
 For airport weather, redirect to aviation specialist.
+
+Hard rules:
+- Do not fabricate warning signals, forecast values, or observation times.
+- If HKO data is unavailable, clearly state the gap and provide a conservative summary.
 
 **Workflow:**
 1. **Historical context** → `rag_search` for past HK weather patterns
@@ -222,10 +285,16 @@ For airport weather, redirect to aviation specialist.
 - ## Current Weather (temp, humidity, wind)
 - ## Active Warnings (typhoon signals, rainstorm warnings)
 - ## Forecast (next 24-48 hours)
-- ## Historical Context (if relevant patterns found)"""
+- ## Historical Context (if relevant patterns found)
+- Include source timestamps when available"""
 
 AIRCRAFT_PROMPT = """\
 You are an ADS-B tracking specialist. Provide real-time flight information.
+
+Hard rules:
+- Do not infer precise positions/routes if data is absent.
+- Distinguish confirmed telemetry from assumptions.
+- If no flights are found, say that explicitly and suggest a narrower query.
 
 **Workflow:**
 1. **Resolve airports** → Use `lookup_airport_codes` for place names
@@ -242,10 +311,18 @@ You are an ADS-B tracking specialist. Provide real-time flight information.
 - Summary: Number of flights found, key details
 - ## Flight Details (callsign, position, altitude, speed, track)
 - ## Route (origin → destination if known)
-- Present as table for multiple flights"""
+- Present as table for multiple flights with last-seen timing when available"""
 
 GENERAL_PROMPT = """\
 You are a comprehensive aviation & weather assistant with access to all tools.
+
+Goal:
+Answer mixed-domain user requests accurately while selecting the right specialist tools.
+
+Hard rules:
+- Do not fabricate tool outputs.
+- Ask tools for evidence before making factual claims.
+- If information is uncertain or unavailable, explicitly mark uncertainty.
 
 **Available Tools:**
 - **Location** → `lookup_airport_codes` (always call first for place names)
@@ -268,7 +345,7 @@ You are a comprehensive aviation & weather assistant with access to all tools.
 **Format:**
 - Clear summary upfront
 - Organize response with headers
-- Cite data sources and timestamps
+- Cite data sources and timestamps; call out stale/missing data
 - Include recommendations if actionable"""
 
 
@@ -381,9 +458,23 @@ def _build_graph(
         logger.info("Self-healing enabled for tool execution.")
 
     # ── Router node ────────────────────────────────────────────────────────────
-    def router_node(state: AgentState) -> Dict[str, Any]:
+    @traceable(name="orchestrator.router", run_type="chain")
+    def router_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
+        _annotate_thread_metadata(config)
         human_msgs = [m for m in state["messages"] if isinstance(m, HumanMessage)]
         latest = human_msgs[-1].content if human_msgs else ""
+
+        # Assistant-level route override (from deployment assistant config).
+        configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
+        if isinstance(configurable, dict):
+            forced_route = str(configurable.get("forced_route", "") or "").strip().lower()
+            allowed = {"aviation_weather", "hk_weather", "aircraft", "general", "planning"}
+            if forced_route in allowed:
+                if forced_route == "planning" and (not ENABLE_PLANNING or not PLANNING_AVAILABLE):
+                    logger.info("Router override requested planning but planning unavailable; falling back to general")
+                    return {"route": "general"}
+                logger.info("Router override from assistant config: %s", forced_route)
+                return {"route": forced_route}
 
         # Deterministic overrides to avoid LLM router drift.
         latest_lower = latest.lower()
@@ -475,8 +566,10 @@ def _build_graph(
     # The base_prompt is prepended as a SystemMessage so long-term memory context
     # can be appended to it per-request without rebuilding the graph.
 
-    def _make_specialist_node(agent_graph, base_prompt: str):
+    def _make_specialist_node(agent_graph, base_prompt: str, specialist_name: str):
+        @traceable(name=f"orchestrator.specialist.{specialist_name}", run_type="chain")
         async def node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
+            _annotate_thread_metadata(config)
             trimmed = _trim_messages(state["messages"])
 
             # Resolve session_id for memory lookup
@@ -486,6 +579,12 @@ def _build_graph(
 
             # Inject dual memories (short-term + long-term) into the system prompt
             system_content = base_prompt
+            configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
+            if isinstance(configurable, dict):
+                assistant_prompt = str(configurable.get("assistant_system_prompt", "") or "").strip()
+                if assistant_prompt:
+                    # Assistant prompt is prepended so domain prompt still enforces hard constraints.
+                    system_content = f"{assistant_prompt}\n\n{base_prompt}"
             if memory_manager is not None:
                 # Use search_combined for both short-term (mem0) and long-term (cognee) context
                 if hasattr(memory_manager, "search_combined"):
@@ -518,11 +617,17 @@ def _build_graph(
         return node
 
     # ── Planning node (for complex multi-step queries) ─────────────────────────
+    @traceable(name="orchestrator.planning", run_type="chain")
     async def planning_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
         """Handle complex queries with plan-and-execute pattern."""
+        _annotate_thread_metadata(config)
         if not PLANNING_AVAILABLE:
             # Fallback to general if planning not available
-            return await _make_specialist_node(general_agent, GENERAL_PROMPT)(state, config)
+            return await _make_specialist_node(
+                general_agent,
+                GENERAL_PROMPT,
+                "general",
+            )(state, config)
 
         trimmed = _trim_messages(state["messages"])
         human_msgs = [m for m in trimmed if isinstance(m, HumanMessage)]
@@ -564,10 +669,22 @@ def _build_graph(
     graph = StateGraph(AgentState)
 
     graph.add_node("router", router_node)
-    graph.add_node("aviation_weather", _make_specialist_node(aviation_agent, AVIATION_PROMPT))
-    graph.add_node("hk_weather",       _make_specialist_node(hk_agent,       HK_PROMPT))
-    graph.add_node("aircraft",         _make_specialist_node(aircraft_agent,  AIRCRAFT_PROMPT))
-    graph.add_node("general",          _make_specialist_node(general_agent,   GENERAL_PROMPT))
+    graph.add_node(
+        "aviation_weather",
+        _make_specialist_node(aviation_agent, AVIATION_PROMPT, "aviation_weather"),
+    )
+    graph.add_node(
+        "hk_weather",
+        _make_specialist_node(hk_agent, HK_PROMPT, "hk_weather"),
+    )
+    graph.add_node(
+        "aircraft",
+        _make_specialist_node(aircraft_agent, AIRCRAFT_PROMPT, "aircraft"),
+    )
+    graph.add_node(
+        "general",
+        _make_specialist_node(general_agent, GENERAL_PROMPT, "general"),
+    )
 
     # Add planning node if available
     if ENABLE_PLANNING and PLANNING_AVAILABLE:

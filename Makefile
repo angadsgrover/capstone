@@ -30,6 +30,8 @@ help:
 	@echo "║   make health         Check health of all services               ║"
 	@echo "║   make test           Run integration tests                      ║"
 	@echo "║   make ingest         Trigger METAR/TAF ingestion                ║"
+	@echo "║   make eval-langsmith Run LangSmith workflow evaluation          ║"
+	@echo "║   make eval-langsmith-local Run evaluation without upload        ║"
 	@echo "║                                                                  ║"
 	@echo "║ DATABASE                                                         ║"
 	@echo "║   make db-shell       Open PostgreSQL shell                      ║"
@@ -151,6 +153,16 @@ ingest:
 
 ingest-local:
 	@cd agent && .venv/bin/python -c "from ingestion.scheduler import run_once; import asyncio; asyncio.run(run_once())"
+
+# ── Evaluation ───────────────────────────────────────────────────────────────
+
+eval-langsmith:
+	@echo "Running LangSmith evaluation (uploaded experiment)..."
+	@cd agent && .venv/bin/python -m evaluation.runner
+
+eval-langsmith-local:
+	@echo "Running LangSmith evaluation in local mode (no upload)..."
+	@cd agent && .venv/bin/python -m evaluation.runner --local
 
 # ── Cleanup ────────────────────────────────────────────────────────────────────
 

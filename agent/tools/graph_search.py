@@ -18,12 +18,29 @@ from typing import TYPE_CHECKING
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+try:
+    from langsmith import traceable
+except Exception:  # pragma: no cover - safe no-op fallback when langsmith unavailable
+    def traceable(*args, **kwargs):
+        if args and callable(args[0]) and len(args) == 1 and not kwargs:
+            return args[0]
+
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
 if TYPE_CHECKING:
     from db import Database
 
 logger = logging.getLogger(__name__)
 
 GRAPH_NAME = "aviation"
+
+
+@traceable(name="retriever.graph_search", run_type="retriever")
+async def _trace_graph_retrieval(cypher: str, documents: list[dict]) -> list[dict]:
+    return documents
 
 
 class GraphSearchInput(BaseModel):
@@ -74,6 +91,21 @@ def make_graph_search_tool(db: "Database") -> StructuredTool:
             if not rows:
                 return "No results."
             results = [json.loads(r["result"]) for r in rows]
+
+            documents = [
+                {
+                    "page_content": json.dumps(result, default=str),
+                    "type": "Document",
+                    "metadata": {
+                        "graph": GRAPH_NAME,
+                        "cypher": cypher,
+                        "row_index": idx,
+                    },
+                }
+                for idx, result in enumerate(results, start=1)
+            ]
+            await _trace_graph_retrieval(cypher=cypher, documents=documents)
+
             return json.dumps(results, indent=2, default=str)
         except Exception as e:
             # AGE not installed or graph not initialised — return graceful message

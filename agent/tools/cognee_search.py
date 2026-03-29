@@ -21,10 +21,76 @@ from typing import TYPE_CHECKING
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+try:
+    from langsmith import traceable
+except Exception:  # pragma: no cover - safe no-op fallback when langsmith unavailable
+    def traceable(*args, **kwargs):
+        if args and callable(args[0]) and len(args) == 1 and not kwargs:
+            return args[0]
+
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
 if TYPE_CHECKING:
     from memory import DualMemoryManager
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_documents(results: object, limit: int, dataset: str) -> list[dict]:
+    documents: list[dict] = []
+
+    if isinstance(results, list):
+        for idx, item in enumerate(results[:limit], start=1):
+            if isinstance(item, dict):
+                page_content = str(item.get("page_content") or item.get("content") or item)
+                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                metadata = {"dataset": dataset, "rank": idx, **metadata}
+            else:
+                page_content = str(item)
+                metadata = {"dataset": dataset, "rank": idx}
+
+            documents.append(
+                {
+                    "page_content": page_content,
+                    "type": "Document",
+                    "metadata": metadata,
+                }
+            )
+        return documents
+
+    if isinstance(results, dict):
+        return [
+            {
+                "page_content": str(results.get("page_content") or results.get("content") or results),
+                "type": "Document",
+                "metadata": {"dataset": dataset, **(results.get("metadata") or {})},
+            }
+        ]
+
+    text = str(results or "")
+    if not text:
+        return []
+
+    chunks = [chunk.strip() for chunk in text.split("\n\n") if chunk.strip()]
+    if not chunks:
+        chunks = [text]
+
+    return [
+        {
+            "page_content": chunk,
+            "type": "Document",
+            "metadata": {"dataset": dataset, "rank": idx},
+        }
+        for idx, chunk in enumerate(chunks[:limit], start=1)
+    ]
+
+
+@traceable(name="retriever.cognee_search", run_type="retriever")
+async def _trace_cognee_retrieval(query: str, dataset: str, documents: list[dict]) -> list[dict]:
+    return documents
 
 
 # ── Input schema ──────────────────────────────────────────────────────────────
@@ -106,6 +172,10 @@ def make_cognee_search_tool(memory_manager: "DualMemoryManager") -> StructuredTo
                     "- Using broader terms (e.g., 'weather incidents' vs 'windshear')\n"
                     "- Checking if relevant documents have been ingested"
                 )
+
+            retriever_docs = _coerce_documents(results=results, limit=limit, dataset=dataset)
+            if retriever_docs:
+                await _trace_cognee_retrieval(query=query, dataset=dataset, documents=retriever_docs)
 
             return (
                 f"## Knowledge Graph Results\n"

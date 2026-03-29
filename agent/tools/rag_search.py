@@ -20,6 +20,18 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 try:
+    from langsmith import traceable
+except Exception:  # pragma: no cover - safe no-op fallback when langsmith unavailable
+    def traceable(*args, **kwargs):
+        if args and callable(args[0]) and len(args) == 1 and not kwargs:
+            return args[0]
+
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
+try:
     from rank_bm25 import BM25Okapi
     BM25_AVAILABLE = True
 except Exception:
@@ -32,6 +44,27 @@ logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _EMBED_CLIENT = None
+
+
+def _to_retriever_documents(rows: list[dict]) -> list[dict]:
+    documents: list[dict] = []
+    for idx, row in enumerate(rows, start=1):
+        row_dict = dict(row)
+        page_content = str(row_dict.pop("content", ""))
+        metadata = {"rank": idx, **row_dict}
+        documents.append(
+            {
+                "page_content": page_content,
+                "type": "Document",
+                "metadata": metadata,
+            }
+        )
+    return documents
+
+
+@traceable(name="retriever.rag_search", run_type="retriever")
+async def _trace_retriever_result(query: str, documents: list[dict]) -> list[dict]:
+    return documents
 
 
 def _get_embed_client():
@@ -169,6 +202,9 @@ def make_rag_search_tool(db: "Database") -> StructuredTool:
                 selected_rows = combined_rows[:limit]
             else:
                 selected_rows = list(rows)[:limit]
+
+            retriever_docs = _to_retriever_documents(selected_rows)
+            await _trace_retriever_result(query=query, documents=retriever_docs)
 
             lines = [
                 (

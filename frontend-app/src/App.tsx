@@ -5,7 +5,6 @@ import AppShell from './components/layout/AppShell'
 import UnifiedAgentView from './components/UnifiedAgentView'
 
 const LogsView = lazy(() => import('./components/logs/LogsView'))
-const VisualizationsView = lazy(() => import('./components/visualizations/VisualizationsView'))
 
 export default function App() {
   return (
@@ -16,7 +15,6 @@ export default function App() {
             <Route path="/" element={<UnifiedAgentView />} />
             <Route path="/chat" element={<UnifiedAgentView />} />
             <Route path="/logs" element={<LogsView />} />
-            <Route path="/visuals" element={<VisualizationsView />} />
           </Routes>
         </Suspense>
       </AppShell>

@@ -16,7 +16,13 @@ function getChatSessionId(): string {
 }
 
 interface BackendStatus {
-  langfuse: boolean
+  langsmith: boolean
+  langsmithProject: string
+  langsmithEndpoint: string
+  langsmithMessage: string
+  langsmithUiUrl: string
+  langsmithDashboardUrl: string
+  tracingMiddlewareEnabled: boolean
   eventBackend: string
   eventAvailable: boolean
   trackedSessions: number
@@ -28,7 +34,13 @@ async function fetchBackendStatus(): Promise<BackendStatus | null> {
     if (!res.ok) return null
     const data = await res.json()
     return {
-      langfuse: data.langfuse?.enabled ?? false,
+      langsmith: data.langsmith?.enabled ?? false,
+      langsmithProject: data.langsmith?.project ?? 'default',
+      langsmithEndpoint: data.langsmith?.endpoint ?? 'https://api.smith.langchain.com',
+      langsmithMessage: data.langsmith?.message ?? 'Status unavailable',
+      langsmithUiUrl: data.langsmith?.ui_url ?? 'https://smith.langchain.com',
+      langsmithDashboardUrl: data.langsmith?.dashboard_url ?? 'https://smith.langchain.com/monitor',
+      tracingMiddlewareEnabled: data.langsmith?.tracing_middleware_enabled ?? false,
       eventBackend: data.event_tracking?.backend ?? 'memory',
       eventAvailable: data.event_tracking?.available ?? false,
       trackedSessions: data.event_tracking?.tracked_sessions ?? 0,
@@ -51,11 +63,20 @@ interface LogEvent {
   step?: number
   tool_input?: Record<string, unknown>
   parent_node?: string
+  run_id?: string
+  parent_run_id?: string
+  trace_id?: string
+  root_run_id?: string
+  project?: string
+  ui_url?: string
+  dashboard_url?: string
+  distributed_headers?: Record<string, unknown>
   raw: Record<string, unknown>
 }
 
 const TYPE_CONFIG: Record<string, { icon: string; colorClass: string; bgClass: string; label: string }> = {
   node: { icon: 'circle', colorClass: 'text-secondary', bgClass: 'bg-secondary/10 border-secondary/30', label: 'Node' },
+  trace_context: { icon: 'hub', colorClass: 'text-primary', bgClass: 'bg-primary/10 border-primary/30', label: 'Trace' },
   routing_decision: { icon: 'alt_route', colorClass: 'text-primary', bgClass: 'bg-primary/10 border-primary/30', label: 'Route' },
   tool: { icon: 'build', colorClass: 'text-tertiary', bgClass: 'bg-tertiary/10 border-tertiary/30', label: 'Tool' },
   reasoning: { icon: 'psychology', colorClass: 'text-secondary', bgClass: 'bg-secondary/10 border-secondary/30',  label: 'Think' },
@@ -71,11 +92,52 @@ const STATUS_COLORS: Record<string, string> = {
   error: 'bg-error/10 text-error border-error/30',
 }
 
-type FilterType = 'all' | 'node' | 'tool' | 'routing_decision' | 'reasoning' | 'internal'
+type FilterType = 'all' | 'trace_context' | 'node' | 'tool' | 'routing_decision' | 'reasoning' | 'internal'
 
 function fmtTime(d: Date): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
     `.${String(d.getMilliseconds()).padStart(3, '0')}`
+}
+
+async function copyText(value: string): Promise<void> {
+  if (!value) return
+  try {
+    await navigator.clipboard.writeText(value)
+  } catch {
+    // ignore clipboard errors
+  }
+}
+
+function buildLangSmithSearchUrl(baseUrl: string | undefined, query: string): string | undefined {
+  if (!baseUrl || !query) return undefined
+  try {
+    const url = new URL('/monitor', baseUrl)
+    url.searchParams.set('q', query)
+    return url.toString()
+  } catch {
+    return undefined
+  }
+}
+
+function eventSignature(data: Record<string, unknown>): string {
+  const normalized = {
+    nodeId: data.nodeId ?? '',
+    event_type: data.event_type ?? '',
+    status: data.status ?? '',
+    label: data.label ?? '',
+    details: data.details ?? '',
+    duration_ms: data.duration_ms ?? '',
+    route: data.route ?? '',
+    step: data.step ?? '',
+    parent_node: data.parent_node ?? '',
+    run_id: data.run_id ?? '',
+    parent_run_id: data.parent_run_id ?? '',
+    trace_id: data.trace_id ?? '',
+    root_run_id: data.root_run_id ?? '',
+    timestamp: data.timestamp ?? '',
+    tool_input: data.tool_input ?? '',
+  }
+  return JSON.stringify(normalized)
 }
 
 function TypeBadge({ type }: { type: string }) {
@@ -108,8 +170,13 @@ export default function LogsView() {
   const [isWatching, setIsWatching] = useState(false)
   const [filter, setFilter] = useState<FilterType>('all')
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [showEmbeddedDashboard, setShowEmbeddedDashboard] = useState(false)
   const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null)
   const cancelRef = useRef<(() => void) | null>(null)
+  const connectStreamRef = useRef<(sessionId: string) => void>(() => {})
+  const reconnectTimerRef = useRef<number | null>(null)
+  const shouldWatchRef = useRef(false)
+  const seenEventSignaturesRef = useRef<Set<string>>(new Set())
   const tableEndRef = useRef<HTMLDivElement>(null)
   const startedRef = useRef(false)
 
@@ -122,17 +189,38 @@ export default function LogsView() {
     tableEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [events])
 
-  useEffect(() => () => cancelRef.current?.(), [])
+  useEffect(() => {
+    return () => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
+      cancelRef.current?.()
+    }
+  }, [])
 
-  const startWatching = useCallback(() => {
-    if (isWatching) return
+  const connectStream = useCallback((sessionId: string) => {
+    if (cancelRef.current) {
+      cancelRef.current()
+      cancelRef.current = null
+    }
+
     setIsWatching(true)
-    const sessionId = getChatSessionId()
     cancelRef.current = streamAgent(`${API_BASE}/api/agent/events?session_id=${encodeURIComponent(sessionId)}`, {
       onChunk: (rawData) => {
         try {
           const data = JSON.parse(rawData)
           if (data.__done__) return
+
+          const signature = eventSignature(data as Record<string, unknown>)
+          if (seenEventSignaturesRef.current.has(signature)) {
+            return
+          }
+          seenEventSignaturesRef.current.add(signature)
+          if (seenEventSignaturesRef.current.size > 5000) {
+            seenEventSignaturesRef.current.clear()
+          }
+
           const event: LogEvent = {
             id: `${Date.now()}-${Math.random()}`,
             timestamp: new Date(),
@@ -146,6 +234,14 @@ export default function LogsView() {
             step: typeof data.step === 'number' ? data.step : undefined,
             tool_input: data.tool_input,
             parent_node: data.parent_node,
+            run_id: typeof data.run_id === 'string' ? data.run_id : undefined,
+            parent_run_id: typeof data.parent_run_id === 'string' ? data.parent_run_id : undefined,
+            trace_id: typeof data.trace_id === 'string' ? data.trace_id : undefined,
+            root_run_id: typeof data.root_run_id === 'string' ? data.root_run_id : undefined,
+            project: typeof data.project === 'string' ? data.project : undefined,
+            ui_url: typeof data.ui_url === 'string' ? data.ui_url : undefined,
+            dashboard_url: typeof data.dashboard_url === 'string' ? data.dashboard_url : undefined,
+            distributed_headers: data.distributed_headers,
             raw: data,
           }
           setEvents((prev) => [...prev, event])
@@ -153,10 +249,48 @@ export default function LogsView() {
           // ignore non-JSON keepalive
         }
       },
-      onError: () => setIsWatching(false),
-      onComplete: () => setIsWatching(false),
+      onError: () => {
+        cancelRef.current = null
+        setIsWatching(false)
+        if (!shouldWatchRef.current) return
+        if (reconnectTimerRef.current !== null) {
+          window.clearTimeout(reconnectTimerRef.current)
+        }
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectTimerRef.current = null
+          if (shouldWatchRef.current) {
+            connectStreamRef.current(getChatSessionId())
+          }
+        }, 1200)
+      },
+      onComplete: () => {
+        cancelRef.current = null
+        setIsWatching(false)
+        if (!shouldWatchRef.current) return
+        if (reconnectTimerRef.current !== null) {
+          window.clearTimeout(reconnectTimerRef.current)
+        }
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectTimerRef.current = null
+          if (shouldWatchRef.current) {
+            connectStreamRef.current(getChatSessionId())
+          }
+        }, 350)
+      },
     })
-  }, [isWatching])
+  }, [])
+
+  connectStreamRef.current = connectStream
+
+  const startWatching = useCallback(() => {
+    shouldWatchRef.current = true
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
+    if (cancelRef.current || isWatching) return
+    connectStream(getChatSessionId())
+  }, [connectStream, isWatching])
 
   // Auto-start watching on mount
   useEffect(() => {
@@ -171,6 +305,11 @@ export default function LogsView() {
   }, [startWatching])
 
   const stopWatching = useCallback(() => {
+    shouldWatchRef.current = false
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
     cancelRef.current?.()
     cancelRef.current = null
     setIsWatching(false)
@@ -179,7 +318,9 @@ export default function LogsView() {
   const clearLogs = useCallback(() => {
     stopWatching()
     setEvents([])
+    seenEventSignaturesRef.current.clear()
     setExpanded(null)
+    setShowEmbeddedDashboard(false)
   }, [stopWatching])
 
   const exportJson = useCallback(() => {
@@ -201,12 +342,26 @@ export default function LogsView() {
 
   const FILTERS: { key: FilterType; label: string; count: number }[] = [
     { key: 'all', label: 'All', count: events.length },
+    { key: 'trace_context', label: 'Trace', count: counts.trace_context ?? 0 },
     { key: 'node', label: 'Nodes', count: counts.node ?? 0 },
     { key: 'routing_decision', label: 'Route', count: counts.routing_decision ?? 0 },
     { key: 'tool', label: 'Tools', count: counts.tool ?? 0 },
     { key: 'reasoning', label: 'Think', count: counts.reasoning ?? 0 },
     { key: 'internal', label: 'Internal', count: counts.internal ?? 0 },
   ]
+
+  const latestTraceContext = [...events].reverse().find(
+    (e) => e.event_type === 'trace_context' || !!e.trace_id || !!e.root_run_id
+  )
+  const langsmithUiUrl = latestTraceContext?.ui_url || backendStatus?.langsmithUiUrl
+  const langsmithDashboardUrl = latestTraceContext?.dashboard_url || backendStatus?.langsmithDashboardUrl
+  const traceId = latestTraceContext?.trace_id
+  const rootRunId = latestTraceContext?.root_run_id
+  const langsmithProject = latestTraceContext?.project || backendStatus?.langsmithProject || ''
+  const traceSearchQuery = traceId ? `trace_id:${traceId}${langsmithProject ? ` project:${langsmithProject}` : ''}` : ''
+  const runSearchQuery = rootRunId ? `run_id:${rootRunId}${langsmithProject ? ` project:${langsmithProject}` : ''}` : ''
+  const traceSearchUrl = buildLangSmithSearchUrl(langsmithUiUrl, traceSearchQuery)
+  const runSearchUrl = buildLangSmithSearchUrl(langsmithUiUrl, runSearchQuery)
 
   const Row = ({ index, style, data }: ListChildComponentProps<{ rows: LogEvent[] }>) => {
     const ev = data.rows[index]
@@ -347,9 +502,164 @@ export default function LogsView() {
               <MaterialIcon icon="delete" className="text-base" />
               Clear
             </button>
+            {langsmithUiUrl && (
+              <button
+                onClick={() => window.open(langsmithUiUrl, '_blank', 'noopener,noreferrer')}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm",
+                  "bg-surface-container-high text-on-surface border border-outline-variant/20",
+                  "hover:bg-surface-container-highest hover:scale-105 hover:border-outline-variant/40",
+                  "active:scale-95 transition-all duration-300"
+                )}
+              >
+                <MaterialIcon icon="open_in_new" className="text-base" />
+                LangSmith Home
+              </button>
+            )}
+            {langsmithDashboardUrl && (
+              <button
+                onClick={() => window.open(langsmithDashboardUrl, '_blank', 'noopener,noreferrer')}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm",
+                  "bg-surface-container-high text-on-surface border border-outline-variant/20",
+                  "hover:bg-surface-container-highest hover:scale-105 hover:border-outline-variant/40",
+                  "active:scale-95 transition-all duration-300"
+                )}
+              >
+                <MaterialIcon icon="monitoring" className="text-base" />
+                Monitor
+              </button>
+            )}
+            {traceSearchUrl && (
+              <button
+                onClick={async () => {
+                  await copyText(traceId || '')
+                  window.open(traceSearchUrl, '_blank', 'noopener,noreferrer')
+                }}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm",
+                  "bg-primary/10 text-primary border border-primary/30",
+                  "hover:bg-primary/15 hover:scale-105 active:scale-95 transition-all duration-300"
+                )}
+                title="Opens LangSmith monitor and copies trace ID"
+              >
+                <MaterialIcon icon="account_tree" className="text-base" />
+                Open Trace
+              </button>
+            )}
+            {runSearchUrl && (
+              <button
+                onClick={async () => {
+                  await copyText(rootRunId || '')
+                  window.open(runSearchUrl, '_blank', 'noopener,noreferrer')
+                }}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm",
+                  "bg-secondary/10 text-secondary border border-secondary/30",
+                  "hover:bg-secondary/15 hover:scale-105 active:scale-95 transition-all duration-300"
+                )}
+                title="Opens LangSmith monitor and copies root run ID"
+              >
+                <MaterialIcon icon="fingerprint" className="text-base" />
+                Open Run
+              </button>
+            )}
+            {langsmithDashboardUrl && (
+              <button
+                onClick={() => setShowEmbeddedDashboard((v) => !v)}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm",
+                  showEmbeddedDashboard
+                    ? "bg-secondary/10 text-secondary border border-secondary/30"
+                    : "bg-surface-container-high text-on-surface border border-outline-variant/20",
+                  "hover:scale-105 active:scale-95 transition-all duration-300"
+                )}
+              >
+                <MaterialIcon icon="web_asset" className="text-base" />
+                {showEmbeddedDashboard ? 'Hide Embed' : 'Embed Dashboard'}
+              </button>
+            )}
           </div>
         </div>
+        {(traceId || rootRunId) && (
+          <div className="mt-4 pt-4 border-t border-outline-variant/15 flex flex-wrap items-center gap-3 text-xs">
+            {traceId && (
+              <div className="inline-flex items-center gap-2">
+                <button
+                  onClick={() => copyText(traceId)}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-container-high border border-outline-variant/20 hover:bg-surface-container-highest transition-colors"
+                  title={traceId}
+                >
+                  <MaterialIcon icon="account_tree" className="text-sm" />
+                  <span className="font-mono">Trace: {traceId.slice(0, 10)}...</span>
+                  <MaterialIcon icon="content_copy" className="text-sm" />
+                </button>
+                {traceSearchUrl && (
+                  <button
+                    onClick={() => window.open(traceSearchUrl, '_blank', 'noopener,noreferrer')}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-primary/10 text-primary border border-primary/30 hover:bg-primary/15 transition-colors"
+                  >
+                    <MaterialIcon icon="open_in_new" className="text-sm" />
+                    Open
+                  </button>
+                )}
+              </div>
+            )}
+            {rootRunId && (
+              <div className="inline-flex items-center gap-2">
+                <button
+                  onClick={() => copyText(rootRunId)}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-container-high border border-outline-variant/20 hover:bg-surface-container-highest transition-colors"
+                  title={rootRunId}
+                >
+                  <MaterialIcon icon="fingerprint" className="text-sm" />
+                  <span className="font-mono">Run: {rootRunId.slice(0, 10)}...</span>
+                  <MaterialIcon icon="content_copy" className="text-sm" />
+                </button>
+                {runSearchUrl && (
+                  <button
+                    onClick={() => window.open(runSearchUrl, '_blank', 'noopener,noreferrer')}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/10 text-secondary border border-secondary/30 hover:bg-secondary/15 transition-colors"
+                  >
+                    <MaterialIcon icon="open_in_new" className="text-sm" />
+                    Open
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {showEmbeddedDashboard && langsmithDashboardUrl && (
+        <div className={cn(
+          "rounded-2xl border border-outline-variant/20 bg-surface-container-low shadow-xl overflow-hidden"
+        )}>
+          <div className="px-4 py-3 border-b border-outline-variant/15 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+              <MaterialIcon icon="monitoring" className="text-base" />
+              Embedded LangSmith Dashboard
+            </div>
+            <button
+              onClick={() => window.open(langsmithDashboardUrl, '_blank', 'noopener,noreferrer')}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs bg-surface-container-high border border-outline-variant/20 hover:bg-surface-container-highest"
+            >
+              <MaterialIcon icon="open_in_new" className="text-sm" />
+              Open in New Tab
+            </button>
+          </div>
+          <iframe
+            src={langsmithDashboardUrl}
+            title="LangSmith Dashboard"
+            className="w-full h-[560px] bg-white"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+          />
+          <div className="px-4 py-2 text-[11px] text-on-surface-variant border-t border-outline-variant/10">
+            If embedding is blocked by provider security headers, use "Open in New Tab".
+          </div>
+        </div>
+      )}
 
       {/* Events Table */}
       <div className={cn(
@@ -429,6 +739,53 @@ export default function LogsView() {
                       {expanded === ev.id && (
                         <tr key={`${ev.id}-expanded`}>
                           <td colSpan={8} className="px-4 py-4 bg-surface-container-high/30">
+                            {(ev.trace_id || ev.run_id || ev.parent_run_id || ev.root_run_id || ev.project) && (
+                              <div className="mb-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                                {ev.project && (
+                                  <div className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-container-high border border-outline-variant/20">
+                                    <MaterialIcon icon="folder" className="text-sm" />
+                                    <span className="text-on-surface-variant">Project:</span>
+                                    <span className="font-mono text-on-surface">{ev.project}</span>
+                                  </div>
+                                )}
+                                {ev.trace_id && (
+                                  <button
+                                    onClick={() => copyText(ev.trace_id ?? '')}
+                                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-container-high border border-outline-variant/20 hover:bg-surface-container-highest"
+                                    title={ev.trace_id}
+                                  >
+                                    <MaterialIcon icon="account_tree" className="text-sm" />
+                                    <span className="text-on-surface-variant">Trace ID:</span>
+                                    <span className="font-mono text-on-surface">{ev.trace_id.slice(0, 16)}...</span>
+                                    <MaterialIcon icon="content_copy" className="text-sm" />
+                                  </button>
+                                )}
+                                {ev.run_id && (
+                                  <button
+                                    onClick={() => copyText(ev.run_id ?? '')}
+                                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-container-high border border-outline-variant/20 hover:bg-surface-container-highest"
+                                    title={ev.run_id}
+                                  >
+                                    <MaterialIcon icon="fingerprint" className="text-sm" />
+                                    <span className="text-on-surface-variant">Run ID:</span>
+                                    <span className="font-mono text-on-surface">{ev.run_id.slice(0, 16)}...</span>
+                                    <MaterialIcon icon="content_copy" className="text-sm" />
+                                  </button>
+                                )}
+                                {ev.parent_run_id && (
+                                  <button
+                                    onClick={() => copyText(ev.parent_run_id ?? '')}
+                                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-container-high border border-outline-variant/20 hover:bg-surface-container-highest"
+                                    title={ev.parent_run_id}
+                                  >
+                                    <MaterialIcon icon="call_split" className="text-sm" />
+                                    <span className="text-on-surface-variant">Parent Run:</span>
+                                    <span className="font-mono text-on-surface">{ev.parent_run_id.slice(0, 16)}...</span>
+                                    <MaterialIcon icon="content_copy" className="text-sm" />
+                                  </button>
+                                )}
+                              </div>
+                            )}
                             <div className="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wider mb-2">
                               Raw Event Data
                             </div>
@@ -456,8 +813,8 @@ export default function LogsView() {
         "rounded-2xl p-4 border border-outline-variant/20",
         "bg-surface-container-low/80 shadow-md"
       )}>
-        <div className="flex items-center justify-between text-xs text-on-surface-variant">
-          <div className="flex items-center gap-6">
+        <div className="flex flex-col gap-3 text-xs text-on-surface-variant xl:flex-row xl:items-start xl:justify-between">
+          <div className="flex flex-wrap items-center gap-4 sm:gap-5">
             {/* Session info */}
             <div className="flex items-center gap-2">
               <MaterialIcon icon="fingerprint" className="text-base" />
@@ -472,21 +829,41 @@ export default function LogsView() {
                     "w-2 h-2 rounded-full",
                     backendStatus.eventAvailable ? "bg-[hsl(var(--status-vfr))]" : "bg-error"
                   )} />
-                  <span>Events: {backendStatus.eventBackend}</span>
+                  <span>Events: {backendStatus.eventBackend} ({backendStatus.trackedSessions} sessions)</span>
                 </div>
                 
                 <div className="flex items-center gap-2">
                   <span className={cn(
                     "w-2 h-2 rounded-full",
-                    backendStatus.langfuse ? "bg-[hsl(var(--status-vfr))]" : "bg-on-surface-variant/30"
+                    backendStatus.langsmith ? "bg-[hsl(var(--status-vfr))]" : "bg-on-surface-variant/30"
                   )} />
-                  <span>Langfuse: {backendStatus.langfuse ? 'Active' : 'Disabled'}</span>
+                  <span>
+                    LangSmith: {backendStatus.langsmith ? 'Active' : 'Disabled'}
+                    {' '}({backendStatus.langsmithProject})
+                  </span>
+                </div>
+
+                <div className="flex max-w-full items-center gap-2 sm:max-w-[420px]" title={backendStatus.langsmithEndpoint}>
+                  <MaterialIcon icon="link" className="text-base" />
+                  <span className="truncate">{backendStatus.langsmithEndpoint}</span>
+                </div>
+
+                <div className="flex max-w-full items-center gap-2 sm:max-w-[440px]" title={backendStatus.langsmithMessage}>
+                  <MaterialIcon icon="info" className="text-base" />
+                  <span className="truncate">{backendStatus.langsmithMessage}</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <MaterialIcon icon="hub" className="text-base" />
+                  <span>
+                    Distributed tracing: {backendStatus.tracingMiddlewareEnabled ? 'enabled' : 'not enabled'}
+                  </span>
                 </div>
               </>
             )}
           </div>
           
-          <div className="flex items-center gap-2 text-[10px]">
+          <div className="flex items-center gap-2 text-[10px] xl:justify-end">
             <MaterialIcon icon="info" className="text-base" />
             <span>Events stream from current chat session</span>
           </div>

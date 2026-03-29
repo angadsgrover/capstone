@@ -1,0 +1,41 @@
+{
+  "assistants": {
+    "assistant-agent-default": {
+      "assistant_id": "assistant-agent-default",
+      "config": {
+        "assistant_system_prompt": "",
+        "base_url": "https://openrouter.ai/api/v1",
+        "forced_route": "",
+        "model": "x-ai/grok-4.1-fast"
+      },
+      "created_at": "2026-03-29T07:51:59.696950Z",
+      "description": "Default assistant bound to the primary graph",
+      "graph_id": "agent",
+      "is_default": true,
+      "metadata": {
+        "default": true
+      },
+      "name": "Default Agent Assistant",
+      "updated_at": "2026-03-29T07:51:59.696950Z",
+      "version": 1,
+      "versions": [
+        {
+          "config": {
+            "assistant_system_prompt": "",
+            "base_url": "https://openrouter.ai/api/v1",
+            "forced_route": "",
+            "model": "x-ai/grok-4.1-fast"
+          },
+          "created_at": "2026-03-29T07:51:59.696950Z",
+          "metadata": {
+            "default": true
+          },
+          "version": 1
+        }
+      ]
+    }
+  },
+  "crons": {},
+  "runs": {},
+  "threads": {}
+}

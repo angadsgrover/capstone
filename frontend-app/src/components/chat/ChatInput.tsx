@@ -107,8 +107,8 @@ export default function ChatInput({ onSend, disabled, placeholder }: ChatInputPr
       </form>
 
       {/* Helper text */}
-      <div className="flex items-center justify-between mt-3 px-2">
-        <div className="flex items-center gap-4 text-[10px] text-on-surface-variant/60">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 px-2">
+        <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-[10px] text-on-surface-variant/60">
           <span className="flex items-center gap-1.5">
             <kbd className="px-1.5 py-0.5 rounded bg-surface-container border border-outline-variant/20 font-mono">Enter</kbd>
             to send

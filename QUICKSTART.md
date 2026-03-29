@@ -176,8 +176,8 @@ SELECT COUNT(*) FROM metar_history;
 | POSTGRES_PASSWORD | ✅ | secure_pass |
 | EMBED_API_KEY | ❌ | (defaults to LLM_API_KEY) |
 | EMBED_BASE_URL | ❌ | (defaults to BASE_URL) |
-| LANGFUSE_PUBLIC_KEY | ❌ | pk-... |
-| LANGFUSE_SECRET_KEY | ❌ | sk-... |
+| LANGSMITH_TRACING | ❌ | true |
+| LANGSMITH_API_KEY | ❌ | ls-... |
 
 ---
 

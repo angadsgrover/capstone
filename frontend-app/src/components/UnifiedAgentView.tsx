@@ -15,7 +15,6 @@ import ReactFlow, {
 import 'reactflow/dist/style.css'
 import { useChatStore } from '@/shared/state/chatStore'
 import { useWorkflowStore } from '@/shared/state/workflowStore'
-import { agentService } from '@/shared/services/agentService'
 import { streamAgent, streamAgentFetch } from '@/shared/services/streamService'
 import { Message } from '@/shared/types/agent'
 import MessageBubble from './chat/MessageBubble'
@@ -25,7 +24,6 @@ import { cn } from '@/lib/utils'
 
 const API_BASE = import.meta.env.VITE_AGENT_API_URL
   ?? (import.meta.env.DEV ? 'http://localhost:8000' : window.location.origin)
-const STREAMING_ENABLED = import.meta.env.VITE_ENABLE_STREAMING !== 'false'
 const CHAT_SESSION_KEY = 'chatSessionId'
 
 function getOrCreateSessionId(): string {
@@ -59,8 +57,6 @@ const EDGE_DEFAULT = { stroke: 'hsl(var(--outline-variant) / 0.55)', strokeDasha
 const EDGE_ACTIVE  = { stroke: 'hsl(var(--secondary))', strokeWidth: 2.5 }
 const EDGE_TOOL    = { stroke: 'hsl(var(--tertiary))', strokeDasharray: '3 2' }
 const EDGE_DONE    = { stroke: 'hsl(var(--status-vfr))' }
-
-const SPECIALIST_NODES = new Set(['aviation_weather', 'hk_weather', 'aircraft', 'general', 'planning'])
 
 // ── Custom nodes ──────────────────────────────────────────────────────────────
 
@@ -157,8 +153,7 @@ export default function UnifiedAgentView() {
   const { addLog, clearLogs } = useWorkflowStore()
 
   const [streamingMsg, setStreamingMsg] = useState<Message | null>(null)
-  const [showWorkflow, setShowWorkflow] = useState(true)
-  const [showMiniMap, setShowMiniMap] = useState(false)
+  const [showWorkflow, setShowWorkflow] = useState(false)
 
   const sessionIdRef = useRef<string>(getOrCreateSessionId())
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -443,7 +438,7 @@ export default function UnifiedAgentView() {
     <div className="flex flex-col h-full w-full relative">
       {/* Toggle workflow button */}
       {messages.length > 0 && (
-        <div className="fixed top-24 right-8 z-20 flex gap-2">
+        <div className="z-20 flex flex-wrap justify-end gap-2 px-4 pt-3 sm:px-6 md:px-8">
           <button
             onClick={() => setShowWorkflow(!showWorkflow)}
             className={cn(
@@ -473,23 +468,28 @@ export default function UnifiedAgentView() {
           >
             <MaterialIcon icon="delete" className="text-base" />
             <span>Clear</span>
-            <kbd className="ml-1 px-1.5 py-0.5 rounded bg-surface-container-highest/50 text-[9px] border border-outline-variant/20">⌘K</kbd>
+            <kbd className="ml-1 hidden px-1.5 py-0.5 rounded bg-surface-container-highest/50 text-[9px] border border-outline-variant/20 sm:inline-flex">⌘K</kbd>
           </button>
         </div>
       )}
 
-      <div className="flex-1 overflow-hidden flex">
+      <div className={cn(
+        "flex-1 overflow-hidden flex",
+        showWorkflow && messages.length > 0 ? "flex-col xl:flex-row" : "flex-col"
+      )}>
         {/* Chat column */}
         <div className={cn(
           "flex flex-col transition-all duration-300",
-          showWorkflow && messages.length > 0 ? "w-1/2 border-r border-outline-variant/20" : "w-full"
+          showWorkflow && messages.length > 0
+            ? "w-full xl:w-1/2 xl:border-r xl:border-outline-variant/20"
+            : "w-full"
         )}>
           {/* Background decoration */}
           <div className="absolute top-1/4 right-20 w-96 h-96 bg-primary/5 rounded-full blur-[120px] -z-10 pointer-events-none" />
           <div className="absolute bottom-40 left-20 w-80 h-80 bg-secondary/5 rounded-full blur-[100px] -z-10 pointer-events-none" />
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-6 md:px-12 py-8 space-y-8">
+          <div className="flex-1 overflow-y-auto px-4 py-6 space-y-8 sm:px-6 md:px-10 lg:px-12">
             {messages.length === 0 && !streamingMsg ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-12 max-w-5xl mx-auto">
                 {/* Hero */}
@@ -560,7 +560,7 @@ export default function UnifiedAgentView() {
           </div>
 
           {/* Input Area */}
-          <div className="w-full px-6 md:px-12 pb-8 pt-4">
+          <div className="w-full px-4 pb-6 pt-4 sm:px-6 md:px-10 lg:px-12 lg:pb-8">
             <div className="max-w-5xl mx-auto">
               <ChatInput
                 onSend={sendMessage}
@@ -573,24 +573,12 @@ export default function UnifiedAgentView() {
 
         {/* Workflow column */}
         {showWorkflow && messages.length > 0 && (
-          <div className="w-1/2 flex flex-col bg-surface-container-lowest/30">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-outline-variant/20">
+          <div className="w-full xl:w-1/2 flex min-h-[320px] xl:min-h-0 flex-col bg-surface-container-lowest/30 border-t border-outline-variant/20 xl:border-t-0">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/20 sm:px-6 sm:py-4">
               <div className="flex items-center gap-2">
                 <MaterialIcon icon="account_tree" className="text-secondary" />
                 <h2 className="text-sm font-bold text-primary">Workflow Execution</h2>
               </div>
-              <button
-                onClick={() => setShowMiniMap(!showMiniMap)}
-                className={cn(
-                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-medium uppercase tracking-wider transition-all",
-                  showMiniMap
-                    ? "bg-secondary/10 text-secondary border border-secondary/30"
-                    : "text-on-surface-variant hover:bg-surface-container-high border border-outline-variant/20"
-                )}
-              >
-                <MaterialIcon icon="map" className="text-xs" />
-                <span>Minimap</span>
-              </button>
             </div>
 
             <div className="flex-1 overflow-hidden">
@@ -606,12 +594,10 @@ export default function UnifiedAgentView() {
               >
                 <Background />
                 <Controls />
-                {showMiniMap && (
-                  <MiniMap
-                    nodeColor={(n) => STATUS_COLORS[n.data?.status ?? 'idle'].border}
-                    maskColor="hsl(var(--background) / 0.35)"
-                  />
-                )}
+                <MiniMap
+                  nodeColor={(n) => STATUS_COLORS[n.data?.status ?? 'idle'].border}
+                  maskColor="hsl(var(--background) / 0.35)"
+                />
               </ReactFlow>
             </div>
           </div>

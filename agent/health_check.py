@@ -109,7 +109,7 @@ class HealthChecker:
             "POSTGRES_DSN",
             "REDIS_URL",
             "NEO4J_PASSWORD",
-            "LANGFUSE_PUBLIC_KEY",
+            "LANGSMITH_API_KEY",
             "EMBED_MODEL",
         ]
 

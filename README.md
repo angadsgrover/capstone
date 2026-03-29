@@ -85,6 +85,20 @@ docker compose -f docker-compose.yml -f docker-compose.graph.yml --profile graph
 - **Mobile**: [MOBILE_APP.md](./MOBILE_APP.md) - React Native guide
 - **Roadmap**: [ROADMAP.md](./ROADMAP.md) - Future enhancements
 
+## LangSmith Evaluation Workflow
+
+Run a detailed evaluation of routing, planning traces, and response quality:
+
+```bash
+# Upload experiment to LangSmith
+make eval-langsmith
+
+# Local dry-run (no upload)
+make eval-langsmith-local
+```
+
+The runner lives at `agent/evaluation/runner.py` and seeds/uses the `aviation-agent-eval` dataset by default.
+
 ## Architecture
 
 ```
@@ -178,6 +192,44 @@ See [MEMORY_ARCHITECTURE.md](./MEMORY_ARCHITECTURE.md) for full details.
 | GET | `/ready` | Readiness probe (graph + DB + dependency status) |
 | GET | `/api/runtime/status` | Runtime pressure and scaling limits for ops/autoscaling |
 
+### Deployment Runtime Endpoints (LangSmith-style, VM-compatible)
+
+These endpoints expose deployment primitives inspired by LangSmith Agent Server and run locally in this service.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/deployment/status` | Deployment runtime health/capabilities |
+| POST | `/api/deployment/assistants` | Create assistant configuration |
+| POST | `/api/deployment/assistants/search` | Search assistants |
+| GET | `/api/deployment/assistants/{assistant_id}` | Get assistant |
+| PATCH | `/api/deployment/assistants/{assistant_id}` | Update assistant (new version) |
+| DELETE | `/api/deployment/assistants/{assistant_id}` | Delete assistant |
+| POST | `/api/deployment/threads` | Create thread |
+| POST | `/api/deployment/threads/search` | Search threads |
+| GET | `/api/deployment/threads/{thread_id}` | Get thread |
+| GET | `/api/deployment/threads/{thread_id}/state` | Get thread state + messages + recent runs |
+| POST | `/api/deployment/threads/{thread_id}/runs/background` | Start background run |
+| POST | `/api/deployment/threads/{thread_id}/runs/wait` | Start run and wait for terminal state |
+| GET | `/api/deployment/threads/{thread_id}/runs/{run_id}/stream` | Stream run workflow events (SSE) |
+| POST | `/api/deployment/threads/{thread_id}/runs/{run_id}/cancel` | Cancel run |
+| POST | `/api/deployment/runs/background` | Stateless run (new thread per run) |
+| POST | `/api/deployment/runs/wait` | Stateless run and wait |
+| POST | `/api/deployment/crons` | Create cron job (thread-bound or stateless) |
+| POST | `/api/deployment/crons/search` | Search cron jobs |
+| PATCH | `/api/deployment/crons/{cron_id}` | Update cron job |
+| DELETE | `/api/deployment/crons/{cron_id}` | Delete cron job |
+
+### Deployment Runtime Modes
+
+- `DEPLOYMENT_RUNTIME_MODE=local` (default): uses local durable JSON state and in-process cron scheduler.
+- `DEPLOYMENT_RUNTIME_MODE=proxy`: forwards deployment API calls to an upstream Agent Server.
+
+Related env vars:
+
+- `DEPLOYMENT_STATE_FILE` (default: `agent/data/deployment_state.json`)
+- `LANGSMITH_AGENT_SERVER_URL` (optional upstream base URL for proxy mode)
+- `LANGSMITH_AGENT_SERVER_API_KEY` (optional `X-Api-Key` for upstream proxy mode)
+
 ### Production Scaling Controls
 
 Use these environment variables to tune multi-user throughput and protection:
@@ -185,8 +237,14 @@ Use these environment variables to tune multi-user throughput and protection:
 - `MAX_CONCURRENT_GRAPH_RUNS` (default: 120)
 - `MAX_PENDING_EVENT_STREAMS` (default: 2000)
 - `EVENT_QUEUE_MAXSIZE` (default: 512)
+- `EVENT_BACKEND` (default: `redis`)
+- `REDIS_EVENT_STREAM_MAXLEN` (default: 2000)
+- `REDIS_EVENT_BLOCK_MS` (default: 60000)
 - `RUN_REGISTRY_TTL_SECONDS` (default: 900)
 - `RUN_REGISTRY_CLEANUP_INTERVAL_SECONDS` (default: 60)
+- `SESSION_RUN_GUARD_ENABLED` (default: true)
+- `SESSION_RUN_GUARD_TTL_SECONDS` (default: 14400)
+- `SESSION_RUN_GUARD_KEY_PREFIX` (default: `agent:session_guard:`)
 - `ENABLE_ENDPOINT_RATE_LIMITING` (default: true)
 - `RATE_LIMIT_WINDOW_SECONDS` (default: 60)
 - `RATE_LIMIT_AGENT_PER_WINDOW` (default: 30)
@@ -221,6 +279,8 @@ When JWT verification is enabled and fallback is disabled, requests with invalid
 - `EXECUTION_MODE=queued` on API tier enqueues `/api/agent/execute` jobs.
 - `agent-worker` consumes Redis queue jobs and runs orchestration.
 - Workflow events and run metadata are stored in Redis (`EVENT_BACKEND=redis`) so any API replica can serve `/api/agent/events`.
+- Crash safety is improved with a dedicated processing queue (`WORKFLOW_QUEUE_PROCESSING_KEY`) and startup recovery (`WORKFLOW_QUEUE_REQUEUE_ON_START=true`).
+- Per-session continuity is protected by distributed session run guards so overlapping runs in the same session/thread are serialized across replicas.
 
 ### Memory & Knowledge Graph Endpoints
 
@@ -308,9 +368,10 @@ NEO4J_PASSWORD=another_strong_password
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 
-# Observability (Langfuse tracing)
-LANGFUSE_PUBLIC_KEY=pk-...
-LANGFUSE_SECRET_KEY=sk-...
+# Observability (LangSmith tracing)
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=ls-...
+# LANGSMITH_PROJECT=default
 
 # Local dev ingestion (if not using Docker)
 METAR_ICAO_LIST=VHHH,EGLL,KJFK,WSSS,OMDB,RJTT  # only used by scheduler.py

@@ -14,6 +14,22 @@ from mcp.client.sse import sse_client
 from mcp.types import Tool as MCPTool
 from langchain_core.tools import StructuredTool
 
+try:
+    from langsmith import traceable
+    from langsmith.run_helpers import get_current_run_tree
+except Exception:  # pragma: no cover - safe no-op fallback when langsmith unavailable
+    def traceable(*args, **kwargs):
+        if args and callable(args[0]) and len(args) == 1 and not kwargs:
+            return args[0]
+
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
+    def get_current_run_tree():
+        return None
+
 logging.basicConfig(
     level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s"
 )
@@ -86,6 +102,31 @@ def clear_request_context(request_id: Optional[str] = None) -> None:
 def _cache_key(tool_name: str, kwargs: Dict[str, Any]) -> str:
     payload = json.dumps(kwargs, sort_keys=True, separators=(",", ":"), default=str)
     return f"{tool_name}:{payload}"
+
+
+def _current_session_id() -> str:
+    request_id = _request_id_var.get()
+    if not request_id:
+        return ""
+    return request_id.split(":", 1)[0].strip()
+
+
+def _annotate_tool_span(tool_name: str) -> None:
+    run_tree = get_current_run_tree()
+    if not run_tree:
+        return
+
+    try:
+        metadata = dict(getattr(run_tree, "metadata", {}) or {})
+        session_id = _current_session_id()
+        if session_id:
+            metadata["session_id"] = session_id
+            metadata["thread_id"] = session_id
+            metadata["conversation_id"] = session_id
+        metadata["tool_name"] = tool_name
+        run_tree.metadata = metadata
+    except Exception:
+        return
 
 
 def _normalize_kwargs(tool_name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -308,6 +349,7 @@ class MCPServer:
         session = self.session
 
         async def _invoke(**kwargs: Any) -> str:
+            _annotate_tool_span(tool.name)
             norm_kwargs = _normalize_kwargs(tool.name, kwargs)
             key = _cache_key(tool.name, norm_kwargs)
             request_id = _request_id_var.get()
@@ -480,10 +522,15 @@ class MCPServer:
 
         args_model = create_model(f"{tool.name}_args", **fields) if fields else None
 
+        traced_invoke = traceable(
+            name=f"mcp.{tool.name}",
+            run_type="tool",
+        )(_invoke)
+
         return StructuredTool(
             name=tool.name,
             description=tool.description or tool.name,
-            coroutine=_invoke,
+            coroutine=traced_invoke,
             func=lambda **kw: None,  # sync stub — always use coroutine path
             args_schema=args_model,
         )
