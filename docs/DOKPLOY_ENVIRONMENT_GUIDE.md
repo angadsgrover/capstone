@@ -232,6 +232,12 @@ If Neo4j is enabled:
 
 - Agent startup fails without `LLM_API_KEY`, `POSTGRES_PASSWORD`, `POSTGRES_DSN`, and `REDIS_URL`.
 
+1. Stream/startup error with `Temporary failure in name resolution`.
+
+- Verify `POSTGRES_DSN` host is reachable from the compose network (for local Dokploy Postgres use `postgres`).
+- Verify `REDIS_URL` host is reachable from the compose network (for local Dokploy Redis use `redis`).
+- Redeploy after variable changes so containers pick up new values.
+
 1. Forgetting redeploy after compose-domain changes.
 
 - Dokploy applies compose domain updates on redeploy.

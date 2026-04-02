@@ -52,8 +52,16 @@ class Database:
                 _DSN_ENV,
             )
             return
-        self._pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
-        logger.info("PostgreSQL pool opened (%s)", dsn.split("@")[-1])
+
+        try:
+            self._pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
+            logger.info("PostgreSQL pool opened (%s)", dsn.split("@")[-1])
+        except Exception as exc:
+            self._pool = None
+            logger.warning(
+                "PostgreSQL connection failed (%s) — database features disabled until restart.",
+                exc,
+            )
 
     async def close(self) -> None:
         if self._pool:
