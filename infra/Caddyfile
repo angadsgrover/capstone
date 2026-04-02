@@ -1,0 +1,35 @@
+# Caddyfile - Automatic HTTPS reverse proxy
+# Domain is set via DOMAIN environment variable
+
+{$DOMAIN} {
+    # Main app - reverse proxy to frontend nginx
+    reverse_proxy frontend:80 {
+        # Pass original headers
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Enable compression
+    encode gzip zstd
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    # Logging
+    log {
+        output stdout
+        format console
+    }
+}
+
+# Health check endpoint (for load balancers)
+:80 {
+    respond /health 200
+}

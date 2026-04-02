@@ -55,6 +55,7 @@ dependencies = [
     "rich>=13.9.4",
     "apscheduler>=3.10.4",
     "PyJWT[crypto]>=2.9.0",
+    "livekit-api>=1.0.0",
 ]
 
 [project.optional-dependencies]

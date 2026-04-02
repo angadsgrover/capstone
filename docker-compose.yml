@@ -14,6 +14,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -70,6 +71,14 @@ services:
       # Optional: separate embedding provider (default falls back to BASE_URL/LLM_API_KEY)
       EMBED_API_KEY: ${EMBED_API_KEY:-}
       EMBED_BASE_URL: ${EMBED_BASE_URL:-}
+      # Transcription (for voice input in browsers without Web Speech API)
+      TRANSCRIBE_API_KEY: ${TRANSCRIBE_API_KEY:-}
+      TRANSCRIBE_MODEL: ${TRANSCRIBE_MODEL:-google/gemini-2.5-flash}
+      # LiveKit (for real-time voice features)
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      # Memory providers
       MEM0_API_KEY: ${MEM0_API_KEY:-${MEM0_KEY:-}}
       MEM0_LONG_TERM_ENABLED: ${MEM0_LONG_TERM_ENABLED:-true}
       MEM0_LONG_TERM_USER_ID: ${MEM0_LONG_TERM_USER_ID:-aviation_knowledge_base}
@@ -143,6 +152,8 @@ services:
       BASE_URL: ${BASE_URL}
       EMBED_API_KEY: ${EMBED_API_KEY:-}
       EMBED_BASE_URL: ${EMBED_BASE_URL:-}
+      TRANSCRIBE_API_KEY: ${TRANSCRIBE_API_KEY:-}
+      TRANSCRIBE_MODEL: ${TRANSCRIBE_MODEL:-google/gemini-2.5-flash}
       MEM0_API_KEY: ${MEM0_API_KEY:-${MEM0_KEY:-}}
       MEM0_LONG_TERM_ENABLED: ${MEM0_LONG_TERM_ENABLED:-true}
       MEM0_LONG_TERM_USER_ID: ${MEM0_LONG_TERM_USER_ID:-aviation_knowledge_base}

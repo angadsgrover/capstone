@@ -1,0 +1,38 @@
+# Production HTTPS with Caddy
+# Usage: docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#
+# Requirements:
+# - Set DOMAIN in .env (e.g., DOMAIN=aviation.example.com)
+# - Ensure DNS A record points to your server IP
+# - Ports 80 and 443 must be open
+
+services:
+  # Override frontend to not expose port 80 directly
+  frontend:
+    ports: []
+    expose: ["80"]
+
+  # Caddy reverse proxy with automatic HTTPS
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    depends_on:
+      - frontend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  caddy_data:
+  caddy_config:

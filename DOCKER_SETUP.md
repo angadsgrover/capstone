@@ -13,8 +13,8 @@ If you want the full stack (LangSmith + Mem0 Cloud + Neo4j + Apache AGE), jump t
 
 ## 1. Prerequisites
 
-- Docker Desktop 4.25+ (macOS/Windows) or Docker Engine 24+ (Linux)
-- Docker Compose v2 (`docker compose version`)
+- Docker Desktop 4.25+ (macOS/Windows), Docker Engine 24+ (Linux), or Podman 4.9+
+- Docker Compose v2 (`docker compose version`) or Podman Compose (`podman compose version`)
 - Git
 - A valid LLM provider key (OpenRouter/OpenAI/etc.)
 
@@ -24,6 +24,22 @@ Check your installation:
 docker --version
 docker compose version
 ```
+
+---
+
+### 1.1 Podman notes
+
+If you use Podman instead of Docker, run the same commands with `podman compose` (and `podman exec` for container shell commands).
+
+Examples:
+
+```bash
+podman compose up -d
+podman compose logs -f agent
+podman compose down
+```
+
+> Tip: `make docker`, `make logs`, `make db-shell`, and related Make targets now auto-detect Docker vs Podman.
 
 ---
 

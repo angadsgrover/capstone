@@ -9,7 +9,7 @@ import pathlib
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -57,6 +57,11 @@ except Exception:  # pragma: no cover - optional dependency handling
     jwt = None
     InvalidTokenError = Exception
     PyJWKClient = None
+
+try:
+    from livekit import api as livekit_api  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - optional dependency handling
+    livekit_api = None
 
 from db import Database
 from deployment_runtime import DeploymentRuntimeStore
@@ -313,6 +318,11 @@ RATE_LIMIT_EXECUTE_PER_WINDOW = int(os.getenv("RATE_LIMIT_EXECUTE_PER_WINDOW", "
 
 # Fall back to client IP when session_id is absent.
 RATE_LIMIT_USE_CLIENT_IP = os.getenv("RATE_LIMIT_USE_CLIENT_IP", "true").lower() == "true"
+
+# LiveKit voice token settings
+LIVEKIT_URL = os.getenv("LIVEKIT_URL", "").strip()
+LIVEKIT_DEFAULT_ROOM = (os.getenv("LIVEKIT_DEFAULT_ROOM") or "polyu-weather-voice").strip() or "polyu-weather-voice"
+LIVEKIT_TOKEN_TTL_SECONDS = max(60, int(os.getenv("LIVEKIT_TOKEN_TTL_SECONDS", "600")))
 
 # CORS hardening
 _cors_origins_raw = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:80,http://localhost:5173")
@@ -701,6 +711,279 @@ async def api_status() -> Dict[str, Any]:
         "runtime": _runtime_stats(),
         "timestamp": _now_iso(),
     }
+
+
+@app.post("/api/livekit/token", status_code=201)
+async def livekit_token(request: Request) -> JSONResponse:
+    """Generate a LiveKit participant token using the standard endpoint contract."""
+    api_key = os.getenv("LIVEKIT_API_KEY", "").strip()
+    api_secret = os.getenv("LIVEKIT_API_SECRET", "").strip()
+    server_url = (os.getenv("LIVEKIT_URL") or LIVEKIT_URL).strip()
+    if not api_key or not api_secret or not server_url:
+        return JSONResponse(
+            {
+                "error": "LiveKit not configured",
+                "details": "Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET",
+            },
+            status_code=503,
+        )
+
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+    except Exception:
+        body = {}
+
+    room_name = str(body.get("room_name") or LIVEKIT_DEFAULT_ROOM).strip() or LIVEKIT_DEFAULT_ROOM
+    room_name = room_name[:128]
+
+    now_epoch = int(time.time())
+    participant_identity = str(body.get("participant_identity") or f"web-{now_epoch}").strip()[:128]
+    participant_name = str(body.get("participant_name") or "Web User").strip()[:128]
+    participant_metadata = str(body.get("participant_metadata") or "")
+
+    raw_attrs = body.get("participant_attributes")
+    participant_attributes: Dict[str, str] = {}
+    if isinstance(raw_attrs, dict):
+        for key, value in raw_attrs.items():
+            participant_attributes[str(key)] = str(value)
+
+    try:
+        if livekit_api is not None:
+            token = (
+                livekit_api.AccessToken(api_key, api_secret)
+                .with_identity(participant_identity)
+                .with_name(participant_name)
+                .with_grants(
+                    livekit_api.VideoGrants(
+                        room_join=True,
+                        room=room_name,
+                        can_publish=True,
+                        can_subscribe=True,
+                        can_publish_data=True,
+                    )
+                )
+                .with_ttl(timedelta(seconds=LIVEKIT_TOKEN_TTL_SECONDS))
+            )
+
+            if participant_metadata:
+                token = token.with_metadata(participant_metadata)
+            if participant_attributes:
+                token = token.with_attributes(participant_attributes)
+
+            participant_token = token.to_jwt()
+        elif jwt is not None:
+            now_epoch = int(time.time())
+            claims: Dict[str, Any] = {
+                "iss": api_key,
+                "sub": participant_identity,
+                "nbf": now_epoch,
+                "exp": now_epoch + LIVEKIT_TOKEN_TTL_SECONDS,
+                "video": {
+                    "roomJoin": True,
+                    "room": room_name,
+                    "canPublish": True,
+                    "canSubscribe": True,
+                    "canPublishData": True,
+                },
+            }
+            if participant_name:
+                claims["name"] = participant_name
+            if participant_metadata:
+                claims["metadata"] = participant_metadata
+            if participant_attributes:
+                claims["attributes"] = participant_attributes
+
+            encoded = jwt.encode(claims, api_secret, algorithm="HS256")
+            participant_token = encoded.decode("utf-8") if isinstance(encoded, bytes) else str(encoded)
+        else:
+            raise RuntimeError("No token encoder is available")
+    except Exception as e:
+        logger.exception("Failed to generate LiveKit token")
+        return JSONResponse(
+            {
+                "error": "Failed to generate token",
+                "details": str(e),
+            },
+            status_code=500,
+        )
+
+    return JSONResponse(
+        {
+            "server_url": server_url,
+            "participant_token": participant_token,
+            "room_name": room_name,
+            "participant_identity": participant_identity,
+            "ttl_seconds": LIVEKIT_TOKEN_TTL_SECONDS,
+        },
+        status_code=201,
+    )
+
+
+@app.post("/api/transcribe", status_code=200)
+async def transcribe_audio(request: Request) -> JSONResponse:
+    """
+    Transcribe audio using OpenAI Whisper API.
+    
+    This endpoint provides speech-to-text for browsers that don't support
+    the Web Speech API (Firefox, Safari, Brave with shields).
+    
+    Request body:
+        audio_base64: Base64-encoded audio data (WebM, WAV, MP3, etc.)
+        language: Optional language code (default: "en")
+    
+    Returns:
+        text: Transcribed text
+        language: Detected or specified language
+    """
+    import base64
+    import io
+    
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+    except Exception:
+        return JSONResponse(
+            {"error": "Invalid JSON body"},
+            status_code=400,
+        )
+    
+    audio_base64 = body.get("audio_base64", "")
+    language = str(body.get("language", "en")).strip()[:10]
+    
+    if not audio_base64:
+        return JSONResponse(
+            {"error": "Missing audio_base64 field"},
+            status_code=400,
+        )
+    
+    # Use OpenRouter for transcription via audio-capable model
+    # Try TRANSCRIBE_API_KEY first, then fall back to LLM_API_KEY
+    api_key = os.getenv("TRANSCRIBE_API_KEY", "").strip()
+    if not api_key:
+        api_key = os.getenv("LLM_API_KEY", "").strip()
+    
+    if not api_key:
+        return JSONResponse(
+            {
+                "error": "Transcription not configured",
+                "details": "Set TRANSCRIBE_API_KEY or LLM_API_KEY for audio transcription",
+            },
+            status_code=503,
+        )
+    
+    try:
+        import httpx
+        
+        # Decode base64 audio to validate it
+        audio_bytes = base64.b64decode(audio_base64)
+        
+        # Validate audio size (max 25MB)
+        if len(audio_bytes) > 25 * 1024 * 1024:
+            return JSONResponse(
+                {"error": "Audio file too large", "details": "Maximum size is 25MB"},
+                status_code=400,
+            )
+        
+        if len(audio_bytes) < 100:
+            return JSONResponse(
+                {"error": "Audio file too small", "details": "Recording may be empty"},
+                status_code=400,
+            )
+        
+        # Determine audio format from the data or default to webm
+        audio_format = "webm"
+        if audio_bytes[:4] == b'RIFF':
+            audio_format = "wav"
+        elif audio_bytes[:3] == b'ID3' or (audio_bytes[0:2] == b'\xff\xfb'):
+            audio_format = "mp3"
+        elif audio_bytes[:4] == b'fLaC':
+            audio_format = "flac"
+        elif audio_bytes[:4] == b'OggS':
+            audio_format = "ogg"
+        
+        # Use OpenRouter's audio transcription via chat completions
+        # Using google/gemini-2.5-flash which supports audio input
+        transcribe_model = os.getenv("TRANSCRIBE_MODEL", "google/gemini-2.5-flash")
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": transcribe_model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": f"Transcribe this audio exactly as spoken. Output ONLY the transcribed text, nothing else. If the audio is empty or unclear, respond with an empty string. Language hint: {language}",
+                                },
+                                {
+                                    "type": "input_audio",
+                                    "input_audio": {
+                                        "data": audio_base64,
+                                        "format": audio_format,
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            )
+            
+            if response.status_code == 401:
+                return JSONResponse(
+                    {"error": "Invalid API key", "details": "Check your TRANSCRIBE_API_KEY or LLM_API_KEY"},
+                    status_code=401,
+                )
+            elif response.status_code == 429:
+                return JSONResponse(
+                    {"error": "Rate limit exceeded", "details": "Please try again later"},
+                    status_code=429,
+                )
+            elif response.status_code != 200:
+                error_detail = response.text[:200] if response.text else "Unknown error"
+                logger.error(f"OpenRouter transcription failed: {response.status_code} - {error_detail}")
+                return JSONResponse(
+                    {"error": "Transcription failed", "details": f"Service returned {response.status_code}"},
+                    status_code=500,
+                )
+            
+            result = response.json()
+            transcript_text = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            
+            return JSONResponse({
+                "text": transcript_text,
+                "language": language,
+            })
+        
+    except base64.binascii.Error:
+        return JSONResponse(
+            {"error": "Invalid base64 audio data"},
+            status_code=400,
+        )
+    except httpx.TimeoutException:
+        return JSONResponse(
+            {"error": "Transcription timeout", "details": "The service took too long to respond"},
+            status_code=504,
+        )
+    except Exception as e:
+        logger.exception("Transcription failed")
+        error_msg = str(e)
+        # Clean up HTML error messages
+        if "<html>" in error_msg.lower() or "<!doctype" in error_msg.lower():
+            error_msg = "Transcription service returned an error"
+        return JSONResponse(
+            {"error": "Transcription failed", "details": error_msg},
+            status_code=500,
+        )
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 

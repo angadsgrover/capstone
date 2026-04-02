@@ -2,7 +2,7 @@
 
 ## Docker (Recommended for First Time)
 
-Note: `docker compose` also works when Docker CLI is backed by Podman on your machine.
+Note: You can use either `docker compose` or `podman compose` for this stack.
 
 ```bash
 cp .env.example .env

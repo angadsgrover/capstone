@@ -3,6 +3,9 @@
 interface ImportMetaEnv {
 	readonly VITE_AGENT_API_URL?: string
 	readonly VITE_ENABLE_STREAMING?: 'true' | 'false'
+	readonly VITE_LIVEKIT_TOKEN_ENDPOINT?: string
+	readonly VITE_LIVEKIT_ROOM_NAME?: string
+	readonly VITE_LIVEKIT_AUTO_SPEAK?: 'true' | 'false'
 	readonly VITE_LANGCHAIN_ENABLED?: 'true' | 'false'
 	readonly VITE_LANGCHAIN_BASE_URL?: string
 	readonly VITE_LANGCHAIN_RUN_ENDPOINT?: string

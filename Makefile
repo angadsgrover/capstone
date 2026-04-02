@@ -3,6 +3,11 @@
 
 .PHONY: help setup dev docker docker-prod docker-stop logs test health clean
 
+# Container engine auto-detection (Docker preferred, Podman fallback)
+CONTAINER_ENGINE ?= $(shell if command -v docker >/dev/null 2>&1; then echo docker; elif command -v podman >/dev/null 2>&1; then echo podman; else echo docker; fi)
+COMPOSE_CMD = $(CONTAINER_ENGINE) compose
+CONTAINER_EXEC = $(CONTAINER_ENGINE) exec
+
 # Default target
 help:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
@@ -72,37 +77,37 @@ dev-mcp:
 
 docker:
 	@echo "Starting Aviation AI (Docker)..."
-	@docker compose up -d --build
+	@$(COMPOSE_CMD) up -d --build
 	@echo "Services starting... Run 'make health' to check status"
 	@echo "Frontend: http://localhost:80"
 
 docker-prod:
 	@echo "Starting Aviation AI (Docker Production)..."
-	@docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+	@$(COMPOSE_CMD) -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 	@echo "Production services started. Run 'make health' to verify."
 
 docker-graph:
 	@echo "Starting Aviation AI with Neo4j..."
-	@docker compose --profile graph up -d --build
+	@$(COMPOSE_CMD) --profile graph up -d --build
 	@echo "Neo4j available at http://localhost:7474"
 
 docker-stop:
-	@docker compose down
+	@$(COMPOSE_CMD) down
 
 docker-clean:
-	@docker compose down -v
+	@$(COMPOSE_CMD) down -v
 	@echo "Containers and volumes removed"
 
 # ── Logs ───────────────────────────────────────────────────────────────────────
 
 logs:
-	@docker compose logs -f
+	@$(COMPOSE_CMD) logs -f
 
 logs-agent:
-	@docker compose logs -f agent
+	@$(COMPOSE_CMD) logs -f agent
 
 logs-mcp:
-	@docker compose logs -f mcp-aviation-wx mcp-hk-climate mcp-adsb
+	@$(COMPOSE_CMD) logs -f mcp-aviation-wx mcp-hk-climate mcp-adsb
 
 # ── Health & Testing ───────────────────────────────────────────────────────────
 
@@ -110,8 +115,8 @@ health:
 	@echo "╔══════════════════════════════════════════════════════════════════╗"
 	@echo "║                    Service Health Check                          ║"
 	@echo "╠══════════════════════════════════════════════════════════════════╣"
-	@printf "║ %-20s " "PostgreSQL:" && (docker exec $$(docker compose ps -q postgres 2>/dev/null) pg_isready -U capstone >/dev/null 2>&1 && echo "✅ Ready" || echo "❌ Down")
-	@printf "║ %-20s " "Redis:" && (docker exec $$(docker compose ps -q redis 2>/dev/null) redis-cli ping 2>/dev/null | grep -q PONG && echo "✅ Ready" || echo "❌ Down")
+	@printf "║ %-20s " "PostgreSQL:" && ($(CONTAINER_EXEC) $$($(COMPOSE_CMD) ps -q postgres 2>/dev/null) pg_isready -U capstone >/dev/null 2>&1 && echo "✅ Ready" || echo "❌ Down")
+	@printf "║ %-20s " "Redis:" && ($(CONTAINER_EXEC) $$($(COMPOSE_CMD) ps -q redis 2>/dev/null) redis-cli ping 2>/dev/null | grep -q PONG && echo "✅ Ready" || echo "❌ Down")
 	@printf "║ %-20s " "Agent API:" && (curl -sf http://localhost:8000/health >/dev/null 2>&1 && echo "✅ Ready" || echo "❌ Down")
 	@printf "║ %-20s " "MCP Aviation:" && (curl -sf http://localhost:8001/sse >/dev/null 2>&1 && echo "✅ Ready" || echo "⚠️  Internal only")
 	@printf "║ %-20s " "MCP HK Climate:" && (curl -sf http://localhost:8002/sse >/dev/null 2>&1 && echo "✅ Ready" || echo "⚠️  Internal only")
@@ -131,25 +136,25 @@ test:
 # ── Database Operations ────────────────────────────────────────────────────────
 
 db-shell:
-	@docker exec -it $$(docker compose ps -q postgres) psql -U capstone
+	@$(CONTAINER_EXEC) -it $$($(COMPOSE_CMD) ps -q postgres) psql -U capstone
 
 db-embeddings:
 	@echo "Embedding counts by source type:"
-	@docker exec $$(docker compose ps -q postgres) psql -U capstone -c \
+	@$(CONTAINER_EXEC) $$($(COMPOSE_CMD) ps -q postgres) psql -U capstone -c \
 		"SELECT source_type, COUNT(*) as count FROM embeddings GROUP BY source_type ORDER BY count DESC;"
 
 db-conversations:
-	@docker exec $$(docker compose ps -q postgres) psql -U capstone -c \
+	@$(CONTAINER_EXEC) $$($(COMPOSE_CMD) ps -q postgres) psql -U capstone -c \
 		"SELECT session_id, COUNT(*) as messages FROM conversations GROUP BY session_id ORDER BY MAX(created_at) DESC LIMIT 10;"
 
 redis-cli:
-	@docker exec -it $$(docker compose ps -q redis) redis-cli
+	@$(CONTAINER_EXEC) -it $$($(COMPOSE_CMD) ps -q redis) redis-cli
 
 # ── Ingestion ──────────────────────────────────────────────────────────────────
 
 ingest:
 	@echo "Triggering METAR/TAF ingestion..."
-	@docker exec $$(docker compose ps -q agent) python -c "from ingestion.scheduler import run_once; import asyncio; asyncio.run(run_once())"
+	@$(CONTAINER_EXEC) $$($(COMPOSE_CMD) ps -q agent) python -c "from ingestion.scheduler import run_once; import asyncio; asyncio.run(run_once())"
 
 ingest-local:
 	@cd agent && .venv/bin/python -c "from ingestion.scheduler import run_once; import asyncio; asyncio.run(run_once())"
@@ -168,7 +173,7 @@ eval-langsmith-local:
 
 clean:
 	@echo "Cleaning up..."
-	@docker compose down -v --remove-orphans
+	@$(COMPOSE_CMD) down -v --remove-orphans
 	@rm -rf agent/__pycache__ agent/**/__pycache__
 	@rm -rf frontend-app/dist frontend-app/node_modules/.cache
 	@echo "Cleanup complete"

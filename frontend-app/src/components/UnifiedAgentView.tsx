@@ -17,6 +17,7 @@ import 'reactflow/dist/style.css'
 import { useChatStore } from '@/shared/state/chatStore'
 import { useWorkflowStore } from '@/shared/state/workflowStore'
 import { streamAgent, streamAgentFetch } from '@/shared/services/streamService'
+import { useLiveKitVoice } from '@/shared/hooks/useLiveKitVoice'
 import { Message } from '@/shared/types/agent'
 import MessageBubble from './chat/MessageBubble'
 import ChatInput from './chat/ChatInput'
@@ -173,11 +174,36 @@ export default function UnifiedAgentView() {
 
   const [streamingMsg, setStreamingMsg] = useState<Message | null>(null)
   const [showWorkflow, setShowWorkflow] = useState(false)
+  const [voiceDraftText, setVoiceDraftText] = useState('')
+  const [voiceDraftVersion, setVoiceDraftVersion] = useState(0)
 
   const sessionIdRef = useRef<string>(getOrCreateSessionId())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const cancelStreamRef = useRef<(() => void) | null>(null)
   const cancelEventsRef = useRef<(() => void) | null>(null)
+
+  const {
+    isConnected: voiceConnected,
+    isConnecting: voiceConnecting,
+    isListening: voiceListening,
+    autoSpeakEnabled,
+    micPermission,
+    interimTranscript,
+    statusLabel: voiceStatusLabel,
+    toggleConnection,
+    startVoiceInput,
+    stopVoiceInput,
+    toggleAutoSpeak,
+    speakText,
+    stopSpeaking,
+  } = useLiveKitVoice({
+    onTranscriptFinal: (text) => {
+      const spokenInput = text.trim()
+      if (!spokenInput) return
+      setVoiceDraftText(spokenInput)
+      setVoiceDraftVersion((current) => current + 1)
+    },
+  })
 
   const [nodes, setNodes, onNodesChange] = useNodesState(TOPOLOGY_NODES)
   const [edges, setEdges, onEdgesChange] = useEdgesState(TOPOLOGY_EDGES)
@@ -207,8 +233,9 @@ export default function UnifiedAgentView() {
     return () => {
       cancelStreamRef.current?.()
       cancelEventsRef.current?.()
+      stopSpeaking()
     }
-  }, [])
+  }, [stopSpeaking])
 
   const resetGraph = useCallback(() => {
     setNodes(TOPOLOGY_NODES.map(n => ({ ...n, data: { ...n.data, status: 'idle', details: '' } })))
@@ -444,12 +471,41 @@ export default function UnifiedAgentView() {
         route: collectedRoute,
       }
       addMessage(finalMsg)
+      speakText(finalMsg.content)
       toast.success('Response complete')
     }
 
     setStreamingMsg(null)
     setLoading(false)
-  }, [isLoading, addMessage, setLoading, resetGraph, clearLogs, setNodeStatus, setNodes, setEdges, addLog])
+  }, [isLoading, addMessage, setLoading, resetGraph, clearLogs, setNodeStatus, setNodes, setEdges, addLog, speakText])
+
+  const handleToggleVoiceConnection = useCallback(() => {
+    void (async () => {
+      const wasConnected = voiceConnected
+      try {
+        await toggleConnection()
+        toast.success(wasConnected ? 'Voice session disconnected' : 'Voice session connected')
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to toggle voice session'
+        toast.error(message)
+      }
+    })()
+  }, [toggleConnection, voiceConnected])
+
+  const handleStartVoiceHold = useCallback(() => {
+    void (async () => {
+      try {
+        await startVoiceInput()
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to start microphone input'
+        toast.error(message)
+      }
+    })()
+  }, [startVoiceInput])
+
+  const handleStopVoiceHold = useCallback(() => {
+    stopVoiceInput()
+  }, [stopVoiceInput])
 
   const isIdle = !isLoading && !streamingMsg
 
@@ -578,6 +634,19 @@ export default function UnifiedAgentView() {
               onSend={sendMessage}
               disabled={!isIdle}
               placeholder="Ask about aviation weather conditions..."
+              onToggleVoiceConnection={handleToggleVoiceConnection}
+              onStartVoiceHold={handleStartVoiceHold}
+              onStopVoiceHold={handleStopVoiceHold}
+              onToggleAutoSpeak={toggleAutoSpeak}
+              voiceConnected={voiceConnected}
+              voiceConnecting={voiceConnecting}
+              voiceListening={voiceListening}
+              autoSpeakEnabled={autoSpeakEnabled}
+              voiceStatusLabel={voiceStatusLabel}
+              voiceInterimTranscript={interimTranscript}
+              micPermission={micPermission}
+              voiceDraftText={voiceDraftText}
+              voiceDraftVersion={voiceDraftVersion}
             />
           </Box>
         </Paper>

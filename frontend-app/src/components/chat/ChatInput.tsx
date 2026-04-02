@@ -1,16 +1,66 @@
-import { useState, useRef, useCallback } from 'react'
-import { Box, Button, Chip, CircularProgress, Paper, Stack, TextField, Typography } from '@mui/material'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { Box, Button, Chip, CircularProgress, IconButton, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material'
 import MaterialIcon from '@/components/ui/MaterialIcon'
 
 interface ChatInputProps {
   onSend: (text: string) => void
   disabled?: boolean
   placeholder?: string
+  onToggleVoiceConnection?: () => void
+  onStartVoiceHold?: () => void
+  onStopVoiceHold?: () => void
+  onToggleAutoSpeak?: () => void
+  voiceConnected?: boolean
+  voiceConnecting?: boolean
+  voiceListening?: boolean
+  autoSpeakEnabled?: boolean
+  voiceStatusLabel?: string
+  voiceInterimTranscript?: string
+  micPermission?: 'unknown' | 'granted' | 'denied'
+  voiceDraftText?: string
+  voiceDraftVersion?: number
 }
 
-export default function ChatInput({ onSend, disabled, placeholder }: ChatInputProps) {
+export default function ChatInput({
+  onSend,
+  disabled,
+  placeholder,
+  onToggleVoiceConnection,
+  onStartVoiceHold,
+  onStopVoiceHold,
+  onToggleAutoSpeak,
+  voiceConnected,
+  voiceConnecting,
+  voiceListening,
+  autoSpeakEnabled,
+  voiceStatusLabel,
+  voiceInterimTranscript,
+  micPermission,
+  voiceDraftText,
+  voiceDraftVersion,
+}: ChatInputProps) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const lastAppliedVoiceVersionRef = useRef<number>(-1)
+  const toggleVoiceInput = useCallback(() => {
+    if (voiceListening) {
+      onStopVoiceHold?.()
+      return
+    }
+    onStartVoiceHold?.()
+  }, [onStartVoiceHold, onStopVoiceHold, voiceListening])
+
+  useEffect(() => {
+    if (typeof voiceDraftVersion !== 'number' || !voiceDraftText?.trim()) return
+    if (voiceDraftVersion === lastAppliedVoiceVersionRef.current) return
+
+    lastAppliedVoiceVersionRef.current = voiceDraftVersion
+    setValue((prev) => {
+      const current = prev.trim()
+      return current ? `${current} ${voiceDraftText.trim()}` : voiceDraftText.trim()
+    })
+    textareaRef.current?.focus()
+  }, [voiceDraftText, voiceDraftVersion])
 
   const submit = useCallback(() => {
     const trimmed = value.trim()
@@ -27,6 +77,7 @@ export default function ChatInput({ onSend, disabled, placeholder }: ChatInputPr
   }
 
   const hasContent = value.trim().length > 0
+  const hasVoiceControls = Boolean(onToggleVoiceConnection || onStartVoiceHold || onToggleAutoSpeak)
 
   return (
     <Box>
@@ -59,6 +110,51 @@ export default function ChatInput({ onSend, disabled, placeholder }: ChatInputPr
             variant="outlined"
           />
 
+          {hasVoiceControls && (
+            <Stack direction="row" spacing={0.6} alignItems="center" sx={{ alignSelf: { xs: 'stretch', sm: 'center' } }}>
+              {onToggleVoiceConnection && (
+                <Tooltip title={voiceConnected ? 'Disconnect LiveKit voice' : 'Connect LiveKit voice'}>
+                  <span>
+                    <IconButton
+                      onClick={onToggleVoiceConnection}
+                      disabled={disabled || Boolean(voiceConnecting)}
+                      color={voiceConnected ? 'success' : 'default'}
+                    >
+                      <MaterialIcon icon={voiceConnected ? 'link_off' : 'link'} filled={voiceConnected} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
+
+              {onStartVoiceHold && (
+                <Tooltip title={voiceListening ? 'Stop voice input' : 'Start voice input'}>
+                  <span>
+                    <IconButton
+                      disabled={disabled || Boolean(voiceConnecting)}
+                      color={voiceListening ? 'secondary' : 'default'}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        toggleVoiceInput()
+                      }}
+                    >
+                      <MaterialIcon icon={voiceListening ? 'mic_off' : 'mic'} filled={voiceListening} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
+
+              {onToggleAutoSpeak && (
+                <Tooltip title={autoSpeakEnabled ? 'Disable spoken responses' : 'Enable spoken responses'}>
+                  <span>
+                    <IconButton onClick={onToggleAutoSpeak} disabled={disabled} color={autoSpeakEnabled ? 'primary' : 'default'}>
+                      <MaterialIcon icon={autoSpeakEnabled ? 'volume_up' : 'volume_off'} filled={autoSpeakEnabled} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
+            </Stack>
+          )}
+
           <Button
             type="submit"
             variant="contained"
@@ -81,13 +177,31 @@ export default function ChatInput({ onSend, disabled, placeholder }: ChatInputPr
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           <Chip size="small" variant="outlined" label="Enter to send" />
           <Chip size="small" variant="outlined" label="Shift+Enter new line" />
+          {hasVoiceControls && voiceStatusLabel && (
+            <Chip
+              size="small"
+              variant="outlined"
+              color={voiceConnected ? 'success' : 'default'}
+              label={voiceStatusLabel}
+            />
+          )}
+          {hasVoiceControls && micPermission === 'denied' && (
+            <Chip size="small" color="error" variant="outlined" label="Mic blocked" />
+          )}
         </Stack>
 
-        {value.length > 0 && (
-          <Typography variant="caption" color="text.secondary">
-            {value.length} chars
-          </Typography>
-        )}
+        <Stack direction="column" spacing={0.25} alignItems={{ xs: 'flex-start', sm: 'flex-end' }}>
+          {voiceInterimTranscript && (
+            <Typography variant="caption" color="secondary.main" sx={{ maxWidth: 300 }}>
+              Listening: {voiceInterimTranscript}
+            </Typography>
+          )}
+          {value.length > 0 && (
+            <Typography variant="caption" color="text.secondary">
+              {value.length} chars
+            </Typography>
+          )}
+        </Stack>
       </Stack>
     </Box>
   )
