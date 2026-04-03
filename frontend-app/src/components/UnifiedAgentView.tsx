@@ -211,7 +211,7 @@ export default function UnifiedAgentView() {
   const toolCountPerSpecialist = useRef<Record<string, number>>({})
 
   useEffect(() => {
-    loadFromStorage()
+    loadFromStorage(sessionIdRef.current)
   }, [loadFromStorage])
 
   useEffect(() => {
@@ -257,7 +257,7 @@ export default function UnifiedAgentView() {
     cancelStreamRef.current?.()
     cancelEventsRef.current?.()
     setStreamingMsg(null)
-    clearMessages()
+    clearMessages(sessionIdRef.current)
     clearLogs()
     resetGraph()
   }, [clearMessages, clearLogs, resetGraph])
@@ -265,7 +265,7 @@ export default function UnifiedAgentView() {
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || isLoading) return
 
-    addMessage({ role: 'user', content: text, timestamp: new Date() })
+    addMessage({ role: 'user', content: text, timestamp: new Date() }, sessionIdRef.current)
     setLoading(true)
 
     // Reset workflow visualization
@@ -470,7 +470,7 @@ export default function UnifiedAgentView() {
         plan: collectedPlan,
         route: collectedRoute,
       }
-      addMessage(finalMsg)
+      addMessage(finalMsg, sessionIdRef.current)
       speakText(finalMsg.content)
       toast.success('Response complete')
     }

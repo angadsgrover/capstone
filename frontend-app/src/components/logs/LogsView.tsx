@@ -23,13 +23,41 @@ import MaterialIcon from '@/components/ui/MaterialIcon'
 
 const API_BASE = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:8000'
 const CHAT_SESSION_KEY = 'chatSessionId'
+const LOG_EVENTS_STORAGE_PREFIX = 'chatLogEvents'
+const MAX_LOG_EVENTS = 5000
 
 // Get the same session ID used by the chat
 function getChatSessionId(): string {
   if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
     return 'default'
   }
-  return localStorage.getItem(CHAT_SESSION_KEY) || 'default'
+
+  const existing = localStorage.getItem(CHAT_SESSION_KEY)
+  if (existing) return existing
+
+  const random = Math.random().toString(36).slice(2, 10)
+  const created = `web-${Date.now().toString(36)}-${random}`
+  localStorage.setItem(CHAT_SESSION_KEY, created)
+  return created
+}
+
+function getLogEventsStorageKey(sessionId: string): string {
+  return `${LOG_EVENTS_STORAGE_PREFIX}:${sessionId}`
+}
+
+function serializeEventForStorage(event: LogEvent): Record<string, unknown> {
+  return {
+    ...event,
+    timestamp: event.timestamp.toISOString(),
+  }
+}
+
+function deserializeEventFromStorage(raw: any): LogEvent {
+  return {
+    ...raw,
+    timestamp: new Date(raw.timestamp),
+    raw: (raw.raw && typeof raw.raw === 'object') ? raw.raw : {},
+  }
 }
 
 interface BackendStatus {
@@ -204,6 +232,44 @@ export default function LogsView() {
   }, [events])
 
   useEffect(() => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return
+
+    try {
+      const sessionId = getChatSessionId()
+      const stored = localStorage.getItem(getLogEventsStorageKey(sessionId))
+      if (!stored) return
+
+      const parsed = JSON.parse(stored)
+      if (!Array.isArray(parsed)) return
+
+      const restored = parsed.map(deserializeEventFromStorage).filter((event) => !Number.isNaN(event.timestamp.getTime()))
+      setEvents(restored)
+
+      const signatures = new Set<string>()
+      for (const event of restored) {
+        signatures.add(eventSignature(event.raw))
+      }
+      seenEventSignaturesRef.current = signatures
+    } catch {
+      // Ignore invalid or stale persisted logs.
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return
+
+    try {
+      const sessionId = getChatSessionId()
+      localStorage.setItem(
+        getLogEventsStorageKey(sessionId),
+        JSON.stringify(events.map(serializeEventForStorage))
+      )
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [events])
+
+  useEffect(() => {
     return () => {
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current)
@@ -258,7 +324,11 @@ export default function LogsView() {
             distributed_headers: data.distributed_headers,
             raw: data,
           }
-          setEvents((prev) => [...prev, event])
+          setEvents((prev) => {
+            const next = [...prev, event]
+            if (next.length <= MAX_LOG_EVENTS) return next
+            return next.slice(-MAX_LOG_EVENTS)
+          })
         } catch {
           // ignore non-JSON keepalive
         }
@@ -332,6 +402,9 @@ export default function LogsView() {
   const clearLogs = useCallback(() => {
     stopWatching()
     setEvents([])
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      localStorage.removeItem(getLogEventsStorageKey(getChatSessionId()))
+    }
     seenEventSignaturesRef.current.clear()
     setExpanded(null)
     setShowEmbeddedDashboard(false)

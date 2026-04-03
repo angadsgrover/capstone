@@ -60,9 +60,15 @@ export function streamAgent(endpoint: string, options: StreamOptions = {}): () =
  * Stream chat tokens via fetch (used by ChatView).
  * Parses `data: {"chunk":"..."}` SSE lines and passes each token to `onChunk`.
  * Also handles tool, thinking, plan, and route events with full metadata.
+ * Returns an AbortController that can be used to cancel the request.
  */
-export async function streamAgentFetch(endpoint: string, options: StreamOptions = {}): Promise<void> {
+export async function streamAgentFetch(
+  endpoint: string,
+  options: StreamOptions = {},
+  abortController?: AbortController
+): Promise<void> {
   const { onChunk, onToolCall, onThinking, onPlan, onRoute, onMetadata, onError, onComplete } = options
+  const controller = abortController ?? new AbortController()
 
   const metadata: StreamMetadata = {
     toolCalls: [],
@@ -72,7 +78,7 @@ export async function streamAgentFetch(endpoint: string, options: StreamOptions 
   }
 
   try {
-    const response = await fetch(endpoint)
+    const response = await fetch(endpoint, { signal: controller.signal })
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
 
     const reader = response.body?.getReader()
@@ -182,6 +188,10 @@ export async function streamAgentFetch(endpoint: string, options: StreamOptions 
       buffer = lines[lines.length - 1]
     }
   } catch (error) {
+    // Don't treat abort as error - it's intentional cancellation
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return
+    }
     onError?.(error instanceof Error ? error : new Error(String(error)))
   }
 }

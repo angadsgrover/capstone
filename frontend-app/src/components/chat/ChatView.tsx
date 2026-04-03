@@ -49,10 +49,10 @@ export default function ChatView() {
   const [streamingMsg, setStreamingMsg] = useState<Message | null>(null)
   const sessionIdRef = useRef<string>(getOrCreateSessionId())
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const cancelStreamRef = useRef<(() => void) | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
-    loadFromStorage()
+    loadFromStorage(sessionIdRef.current)
   }, [loadFromStorage])
 
   useEffect(() => {
@@ -71,19 +71,28 @@ export default function ChatView() {
   }, [])
 
   useEffect(() => {
-    return () => cancelStreamRef.current?.()
+    return () => abortControllerRef.current?.abort()
   }, [])
 
-  const handleClear = useCallback(() => {
-    cancelStreamRef.current?.()
+  const handleAbort = useCallback(() => {
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
     setStreamingMsg(null)
-    clearMessages()
+    setLoading(false)
+    toast.info('Request cancelled')
+  }, [setLoading])
+
+  const handleClear = useCallback(() => {
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+    setStreamingMsg(null)
+    clearMessages(sessionIdRef.current)
   }, [clearMessages])
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || isLoading) return
 
-    addMessage({ role: 'user', content: text, timestamp: new Date() })
+    addMessage({ role: 'user', content: text, timestamp: new Date() }, sessionIdRef.current)
     setLoading(true)
 
     if (STREAMING_ENABLED) {
@@ -103,7 +112,12 @@ export default function ChatView() {
     }
     setStreamingMsg(placeholder)
 
+    // Create abort controller for this request
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     let accumulated = ''
+    let aborted = false
     let errored = false
     const collectedToolCalls: Message['toolCalls'] = []
     const collectedThinking: Message['thinking'] = []
@@ -112,13 +126,8 @@ export default function ChatView() {
 
     const endpoint = `${API_BASE}/api/agent/stream?input=${encodeURIComponent(text)}&session_id=${encodeURIComponent(sessionIdRef.current)}`
 
-    await new Promise<void>((resolve) => {
-      cancelStreamRef.current = () => {
-        errored = true
-        resolve()
-      }
-
-      streamAgentFetch(endpoint, {
+    try {
+      await streamAgentFetch(endpoint, {
         onChunk: (chunk) => {
           accumulated += chunk
           setStreamingMsg(prev => prev ? { ...prev, content: accumulated } : placeholder)
@@ -148,15 +157,34 @@ export default function ChatView() {
           setStreamingMsg(prev => prev ? { ...prev, route } : placeholder)
         },
         onError: async () => {
+          // Check if it was aborted by user
+          if (controller.signal.aborted) {
+            aborted = true
+            return
+          }
           errored = true
           setStreamingMsg(null)
           toast.warning('Streaming failed, falling back to standard response')
           await sendFull(text, true)
-          resolve()
         },
-        onComplete: () => resolve(),
-      })
-    })
+        onComplete: () => {},
+      }, controller)
+    } catch {
+      // Aborted requests throw - this is expected
+      if (controller.signal.aborted) {
+        aborted = true
+      }
+    }
+
+    // Clean up abort controller ref
+    if (abortControllerRef.current === controller) {
+      abortControllerRef.current = null
+    }
+
+    // Don't add message if aborted
+    if (aborted) {
+      return
+    }
 
     if (!errored && accumulated.trim()) {
       const finalMsg: Message = {
@@ -167,7 +195,7 @@ export default function ChatView() {
         plan: collectedPlan,
         route: collectedRoute,
       }
-      addMessage(finalMsg)
+      addMessage(finalMsg, sessionIdRef.current)
     } else if (!errored) {
       // Defensive fallback: if SSE ends without any visible token content,
       // perform a regular request so the user never sees a silent empty response.
@@ -204,11 +232,11 @@ export default function ChatView() {
         route,
         plan: Array.isArray(plan) ? plan : undefined,
         thinking: thinking.length ? thinking : undefined,
-      })
+      }, sessionIdRef.current)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error'
       toast.error(`Agent error: ${msg}`)
-      addMessage({ role: 'agent', content: `Error: ${msg}`, timestamp: new Date() })
+      addMessage({ role: 'agent', content: `Error: ${msg}`, timestamp: new Date() }, sessionIdRef.current)
     } finally {
       setLoading(false)
     }
@@ -322,7 +350,9 @@ export default function ChatView() {
         <div className="max-w-5xl mx-auto">
           <ChatInput
             onSend={sendMessage}
+            onAbort={handleAbort}
             disabled={!isIdle}
+            isProcessing={isLoading || Boolean(streamingMsg)}
             placeholder="Ask about aviation weather conditions..."
           />
         </div>

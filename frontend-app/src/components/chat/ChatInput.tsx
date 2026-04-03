@@ -4,7 +4,9 @@ import MaterialIcon from '@/components/ui/MaterialIcon'
 
 interface ChatInputProps {
   onSend: (text: string) => void
+  onAbort?: () => void
   disabled?: boolean
+  isProcessing?: boolean
   placeholder?: string
   onToggleVoiceConnection?: () => void
   onStartVoiceHold?: () => void
@@ -23,7 +25,9 @@ interface ChatInputProps {
 
 export default function ChatInput({
   onSend,
+  onAbort,
   disabled,
+  isProcessing,
   placeholder,
   onToggleVoiceConnection,
   onStartVoiceHold,
@@ -155,15 +159,28 @@ export default function ChatInput({
             </Stack>
           )}
 
-          <Button
-            type="submit"
-            variant="contained"
-            disabled={disabled || !hasContent}
-            sx={{ minWidth: { xs: '100%', sm: 130 }, height: 48 }}
-            startIcon={disabled ? <CircularProgress size={16} color="inherit" /> : <MaterialIcon icon="send" filled={hasContent} />}
-          >
-            {disabled ? 'Processing' : 'Send'}
-          </Button>
+          {isProcessing && onAbort ? (
+            <Button
+              type="button"
+              variant="outlined"
+              color="error"
+              onClick={onAbort}
+              sx={{ minWidth: { xs: '100%', sm: 130 }, height: 48 }}
+              startIcon={<MaterialIcon icon="stop_circle" filled />}
+            >
+              Stop
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              variant="contained"
+              disabled={disabled || !hasContent}
+              sx={{ minWidth: { xs: '100%', sm: 130 }, height: 48 }}
+              startIcon={disabled ? <CircularProgress size={16} color="inherit" /> : <MaterialIcon icon="send" filled={hasContent} />}
+            >
+              {disabled ? 'Processing' : 'Send'}
+            </Button>
+          )}
         </Stack>
       </Paper>
 

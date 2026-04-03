@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
+import { BrowserRouter as Router, useLocation } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { Box, CircularProgress, CssBaseline, PaletteMode, ThemeProvider } from '@mui/material'
 import AppShell from './components/layout/AppShell'
@@ -7,6 +7,31 @@ import UnifiedAgentView from './components/UnifiedAgentView'
 import { buildAppTheme } from './theme/appTheme'
 
 const LogsView = lazy(() => import('./components/logs/LogsView'))
+
+function PersistentViews() {
+  const location = useLocation()
+  const normalizedPath = location.pathname === '/' ? '/chat' : location.pathname
+  const showLogs = normalizedPath === '/logs'
+
+  return (
+    <Suspense
+      fallback={
+        <Box sx={{ display: 'grid', placeItems: 'center', minHeight: 280 }}>
+          <CircularProgress size={28} />
+        </Box>
+      }
+    >
+      <Box sx={{ height: '100%', minHeight: 0 }}>
+        <Box sx={{ display: showLogs ? 'none' : 'block', height: '100%', minHeight: 0 }}>
+          <UnifiedAgentView />
+        </Box>
+        <Box sx={{ display: showLogs ? 'block' : 'none', height: '100%', minHeight: 0 }}>
+          <LogsView />
+        </Box>
+      </Box>
+    </Suspense>
+  )
+}
 
 export default function App() {
   const [mode, setMode] = useState<PaletteMode>('dark')
@@ -31,19 +56,7 @@ export default function App() {
       <CssBaseline />
       <Router>
         <AppShell mode={mode} onToggleMode={toggleColorMode}>
-          <Suspense
-            fallback={
-              <Box sx={{ display: 'grid', placeItems: 'center', minHeight: 280 }}>
-                <CircularProgress size={28} />
-              </Box>
-            }
-          >
-            <Routes>
-              <Route path="/" element={<UnifiedAgentView />} />
-              <Route path="/chat" element={<UnifiedAgentView />} />
-              <Route path="/logs" element={<LogsView />} />
-            </Routes>
-          </Suspense>
+          <PersistentViews />
         </AppShell>
         <Toaster richColors position="bottom-right" />
       </Router>

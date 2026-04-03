@@ -4,49 +4,62 @@ import { Message } from '../types/agent'
 interface ChatStore {
   messages: Message[]
   isLoading: boolean
-  addMessage: (message: Message) => void
-  setMessages: (messages: Message[]) => void
+  addMessage: (message: Message, sessionId?: string) => void
+  setMessages: (messages: Message[], sessionId?: string) => void
   setLoading: (loading: boolean) => void
-  clearMessages: () => void
-  loadFromStorage: () => void
-  saveToStorage: () => void
+  clearMessages: (sessionId?: string) => void
+  loadFromStorage: (sessionId?: string) => void
+  saveToStorage: (sessionId?: string) => void
 }
 
-const CHAT_STORAGE_KEY = 'chatHistory'
+const CHAT_STORAGE_PREFIX = 'chatHistory'
+const CHAT_SESSION_KEY = 'chatSessionId'
+
+function getActiveSessionId(): string {
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+    return 'default'
+  }
+  return localStorage.getItem(CHAT_SESSION_KEY) || 'default'
+}
+
+function getSessionStorageKey(sessionId?: string): string {
+  const safeSessionId = sessionId || getActiveSessionId()
+  return `${CHAT_STORAGE_PREFIX}:${safeSessionId}`
+}
 
 export const useChatStore = create<ChatStore>((set, get) => ({
   messages: [],
   isLoading: false,
 
-  addMessage: (message: Message) => {
+  addMessage: (message: Message, sessionId?: string) => {
     set((state) => ({
       messages: [...state.messages, message],
     }))
     // Auto-save to storage
-    setTimeout(() => get().saveToStorage(), 0)
+    setTimeout(() => get().saveToStorage(sessionId), 0)
   },
 
-  setMessages: (messages: Message[]) => {
+  setMessages: (messages: Message[], sessionId?: string) => {
     set({ messages })
-    setTimeout(() => get().saveToStorage(), 0)
+    setTimeout(() => get().saveToStorage(sessionId), 0)
   },
 
   setLoading: (loading: boolean) => {
     set({ isLoading: loading })
   },
 
-  clearMessages: () => {
+  clearMessages: (sessionId?: string) => {
     set({ messages: [] })
     if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem(CHAT_STORAGE_KEY)
+      localStorage.removeItem(getSessionStorageKey(sessionId))
     }
   },
 
-  loadFromStorage: () => {
+  loadFromStorage: (sessionId?: string) => {
     if (typeof localStorage === 'undefined') return
 
     try {
-      const stored = localStorage.getItem(CHAT_STORAGE_KEY)
+      const stored = localStorage.getItem(getSessionStorageKey(sessionId))
       if (stored) {
         const parsed = JSON.parse(stored)
         const messages = parsed.map((msg: any) => ({
@@ -70,12 +83,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  saveToStorage: () => {
+  saveToStorage: (sessionId?: string) => {
     if (typeof localStorage === 'undefined') return
 
     try {
       const state = get()
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(state.messages))
+      localStorage.setItem(getSessionStorageKey(sessionId), JSON.stringify(state.messages))
     } catch (error) {
       console.error('Failed to save chat history:', error)
     }
