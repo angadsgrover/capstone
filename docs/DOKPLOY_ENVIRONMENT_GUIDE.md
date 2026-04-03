@@ -238,6 +238,12 @@ If Neo4j is enabled:
 - Verify `REDIS_URL` host is reachable from the compose network (for local Dokploy Redis use `redis`).
 - Redeploy after variable changes so containers pick up new values.
 
+1. Voice input says `Microphone API is not available in this browser`.
+
+- Browser microphone capture requires a secure context.
+- Access the app via Dokploy HTTPS domain, not plain `http://<server-ip>`.
+- `localhost` is allowed for local testing, but raw HTTP IP/host URLs are blocked by browsers.
+
 1. Forgetting redeploy after compose-domain changes.
 
 - Dokploy applies compose domain updates on redeploy.

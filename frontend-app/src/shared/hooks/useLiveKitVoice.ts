@@ -100,6 +100,14 @@ function parseLiveKitSegments(value: unknown): Array<{ text: string; final: bool
     .filter((segment): segment is { text: string; final: boolean } => segment !== null)
 }
 
+function getMicrophoneApiUnavailableMessage(): string {
+  if (typeof window !== 'undefined' && !window.isSecureContext) {
+    return 'Microphone requires HTTPS or localhost. Open this app via a secure domain.'
+  }
+
+  return 'Microphone API is not available in this browser'
+}
+
 export function useLiveKitVoice({ onTranscriptFinal }: VoiceOptions): UseLiveKitVoiceResult {
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
@@ -141,7 +149,7 @@ export function useLiveKitVoice({ onTranscriptFinal }: VoiceOptions): UseLiveKit
 
   const ensureMicrophoneAccess = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('Microphone API is not available in this browser')
+      throw new Error(getMicrophoneApiUnavailableMessage())
     }
 
     try {
@@ -149,8 +157,30 @@ export function useLiveKitVoice({ onTranscriptFinal }: VoiceOptions): UseLiveKit
       setMicPermission('granted')
       stream.getTracks().forEach((track) => track.stop())
     } catch (error) {
-      setMicPermission('denied')
-      const message = error instanceof Error ? error.message : 'Microphone permission denied'
+      if (typeof DOMException !== 'undefined' && error instanceof DOMException) {
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+          setMicPermission('denied')
+          throw new Error('Microphone permission denied. Allow access in browser site settings.')
+        }
+
+        if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+          setMicPermission('unknown')
+          throw new Error('No microphone detected. Connect a microphone and try again.')
+        }
+
+        if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+          setMicPermission('unknown')
+          throw new Error('Microphone is busy in another app. Close other audio apps and retry.')
+        }
+
+        if (error.name === 'SecurityError') {
+          setMicPermission('unknown')
+          throw new Error(getMicrophoneApiUnavailableMessage())
+        }
+      }
+
+      setMicPermission('unknown')
+      const message = error instanceof Error ? error.message : 'Unable to access microphone'
       throw new Error(message)
     }
   }, [])
@@ -409,7 +439,13 @@ export function useLiveKitVoice({ onTranscriptFinal }: VoiceOptions): UseLiveKit
     if (isListening) return
 
     if (micPermission !== 'granted') {
-      await ensureMicrophoneAccess()
+      try {
+        await ensureMicrophoneAccess()
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to access microphone'
+        setStatusLabel(message)
+        throw error
+      }
     }
 
     // If Web Speech API is not supported or we're in fallback mode, use MediaRecorder
