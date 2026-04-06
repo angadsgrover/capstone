@@ -65,6 +65,41 @@ Planning-aware fields/events handled by the UI:
 - `thinking`
 - `tool_start` / `tool_end`
 
+## Voice Chat Tuning (TTS)
+
+The voice assistant uses browser speech synthesis with improved handling:
+- Preferred voice selection by name/language
+- Chunked playback for long responses (fewer cut-offs)
+- Duplicate-speech suppression for rapid updates
+- Persistent auto-speak preference in browser local storage
+
+Optional frontend environment variables (for example in `.env.local`):
+
+```bash
+VITE_LIVEKIT_AUTO_SPEAK=true
+VITE_TTS_VOICE_NAME=Microsoft Aria Online (Natural) - English (United States)
+VITE_TTS_LANG=en-US
+VITE_TTS_RATE=0.96
+VITE_TTS_PITCH=1.0
+VITE_TTS_VOLUME=1.0
+```
+
+Notes:
+- `VITE_TTS_VOICE_NAME` is best-effort and depends on voices available in the user's browser/OS.
+- If the exact voice is not found, the app falls back to high-quality English voices and then language/default voices.
+
+Optional neural TTS output (server-generated audio):
+
+```bash
+VITE_NEURAL_TTS_ENABLED=true
+VITE_NEURAL_TTS_PREFER=true
+VITE_NEURAL_TTS_MODEL=gpt-4o-mini-tts
+VITE_NEURAL_TTS_VOICE=alloy
+VITE_NEURAL_TTS_FORMAT=mp3
+```
+
+Neural TTS calls `POST /api/tts` and falls back to browser TTS automatically if neural synthesis fails or is unavailable.
+
 ## Important Paths
 
 - `src/components/chat`: chat rendering and stream handling

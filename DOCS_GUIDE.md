@@ -56,36 +56,39 @@ This guide explains the purpose and audience of each documentation file in the p
 
 ---
 
-### 🐳 [DOCKER_SETUP.md](./DOCKER_SETUP.md)
-**Purpose**: Complete Docker operations and deployment guide
-**Audience**: DevOps, deployment engineers, users preferring containerized setup
+### ☁️ [docs/CLOUD_DEPLOYMENT.md](./docs/CLOUD_DEPLOYMENT.md)
+**Purpose**: Canonical deployment flow for Docker/Podman on cloud VMs and new machines
+**Audience**: DevOps, platform engineers, and operators deploying the stack
 **Content**:
-- First-time Docker setup
-- Docker compose orchestration
-- Optional AGE graph database setup
-- Optional Neo4j setup (--profile graph)
-- Volume management
-- Data migration to larger drives
-- Backup and restore procedures
-- Production considerations
+- Ubuntu host setup (Docker install + firewall)
+- Core, HTTPS, dev, and graph compose startup profiles
+- Storage migration strategies and data volume placement
+- Backup/restore and machine migration playbook
+- Production hardening and troubleshooting checklist
 
-**When to use**: Docker deployment, moving data between drives, backup procedures, production setup
+**When to use**: Any deployment task (new setup, migration, operations, hardening)
+
+---
+
+### 🐳 [DOCKER_SETUP.md](./DOCKER_SETUP.md)
+**Purpose**: Compatibility wrapper with Docker-specific jump links
+**Audience**: Existing users familiar with legacy root-level docs
+**Content**:
+- Quick command snippets
+- Pointers into canonical cloud deployment sections
+
+**When to use**: Quick Docker command lookup before jumping to canonical guide
 
 ---
 
 ### 🖥️ [VM_NEW_MACHINE_SETUP.md](./VM_NEW_MACHINE_SETUP.md)
-**Purpose**: Cloud VM and new machine deployment playbook
-**Audience**: DevOps deploying to cloud VMs (AWS, GCP, Azure) or new physical machines
+**Purpose**: Compatibility wrapper with VM/new-machine fast path
+**Audience**: Existing users who previously used VM setup doc directly
 **Content**:
-- Fresh Ubuntu/Debian VM setup from scratch
-- System dependencies installation
-- Docker installation and configuration
-- Security hardening (firewall, SSH keys)
-- Environment variable management
-- Resource sizing recommendations
-- Monitoring setup
+- VM fast-path setup snippet
+- Pointers into canonical cloud deployment sections
 
-**When to use**: Deploying to a new cloud VM, setting up a fresh production server
+**When to use**: Quick VM bootstrap, then continue in canonical guide
 
 ---
 
@@ -177,6 +180,8 @@ This guide explains the purpose and audience of each documentation file in the p
 **Purpose**: Historical planning documents no longer actively maintained
 **Content**:
 - `architecture_plan.md` - Original architecture planning (now implemented)
+- `SUMMARY_MAJOR_FEATURES.md` - Historical student-style implementation summary snapshot
+- `SUMMARY_UNIFIED_INTERFACE.md` - Historical note for the unified chat/workflow UI rollout
 
 **When to use**: Historical reference, understanding original design decisions
 
@@ -251,8 +256,9 @@ This guide explains the purpose and audience of each documentation file in the p
 | README.md | Project overview + quick start | Everyone |
 | QUICKSTART.md | One-page command reference | Active developers |
 | DEVELOPMENT.md | Local dev setup guide | Contributors |
-| DOCKER_SETUP.md | Docker deployment + operations | DevOps/deployment |
-| VM_NEW_MACHINE_SETUP.md | Cloud VM setup | DevOps/infrastructure |
+| docs/CLOUD_DEPLOYMENT.md | Canonical cloud + Docker deployment flow | DevOps/deployment |
+| DOCKER_SETUP.md | Legacy Docker wrapper with quick links | DevOps/deployment |
+| VM_NEW_MACHINE_SETUP.md | Legacy VM wrapper with quick links | DevOps/infrastructure |
 | MEMORY_ARCHITECTURE.md | Dual-memory system | Backend developers |
 | EMBEDDINGS.md | Embedding model config | Backend developers |
 | CACHING.md | Redis performance tuning | Backend developers |
@@ -266,10 +272,10 @@ This guide explains the purpose and audience of each documentation file in the p
 If you can't find what you need in the documentation:
 
 1. **Development questions**: See [DEVELOPMENT.md](./DEVELOPMENT.md#troubleshooting)
-2. **Docker issues**: See [DOCKER_SETUP.md](./DOCKER_SETUP.md#troubleshooting)
+2. **Docker or VM issues**: See [docs/CLOUD_DEPLOYMENT.md](./docs/CLOUD_DEPLOYMENT.md#12-troubleshooting)
 3. **Quick fixes**: See [QUICKSTART.md](./QUICKSTART.md#troubleshooting)
 4. **Architecture questions**: Start with [README.md](./README.md#architecture)
 
 ---
 
-*Last updated: 2026-03-22*
+*Last updated: 2026-04-04*

@@ -21,7 +21,7 @@ load_dotenv()
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 
 try:
@@ -323,6 +323,13 @@ RATE_LIMIT_USE_CLIENT_IP = os.getenv("RATE_LIMIT_USE_CLIENT_IP", "true").lower()
 LIVEKIT_URL = os.getenv("LIVEKIT_URL", "").strip()
 LIVEKIT_DEFAULT_ROOM = (os.getenv("LIVEKIT_DEFAULT_ROOM") or "polyu-weather-voice").strip() or "polyu-weather-voice"
 LIVEKIT_TOKEN_TTL_SECONDS = max(60, int(os.getenv("LIVEKIT_TOKEN_TTL_SECONDS", "600")))
+
+# Optional neural TTS settings (OpenAI-compatible /audio/speech API)
+TTS_BASE_URL = (os.getenv("TTS_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+TTS_MODEL = (os.getenv("TTS_MODEL") or "gpt-4o-mini-tts").strip() or "gpt-4o-mini-tts"
+TTS_VOICE = (os.getenv("TTS_VOICE") or "alloy").strip() or "alloy"
+TTS_FORMAT = (os.getenv("TTS_FORMAT") or "mp3").strip().lower() or "mp3"
+TTS_TIMEOUT_SECONDS = max(10.0, float(os.getenv("TTS_TIMEOUT_SECONDS", "90")))
 
 # CORS hardening
 _cors_origins_raw = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:80,http://localhost:5173")
@@ -982,6 +989,148 @@ async def transcribe_audio(request: Request) -> JSONResponse:
             error_msg = "Transcription service returned an error"
         return JSONResponse(
             {"error": "Transcription failed", "details": error_msg},
+            status_code=500,
+        )
+
+
+@app.post("/api/tts", status_code=200)
+async def synthesize_speech(request: Request) -> Response:
+    """
+    Generate neural speech audio from text using an OpenAI-compatible /audio/speech API.
+
+    This endpoint is optional and is intended to provide more human-like output than
+    browser speech synthesis when configured.
+
+    Request body:
+        text: required text to synthesize
+        voice: optional override voice name
+        model: optional override model name
+        format: optional output format (mp3|wav|opus|aac|flac|pcm)
+        speed: optional speaking speed (0.25 - 4.0)
+        language: optional language hint (not all providers use this)
+    """
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"error": "Missing text field"}, status_code=400)
+
+    if len(text) > 6000:
+        return JSONResponse(
+            {"error": "Text too long", "details": "Maximum text length is 6000 characters"},
+            status_code=400,
+        )
+
+    api_key = (os.getenv("TTS_API_KEY") or os.getenv("LLM_API_KEY") or "").strip()
+    if not api_key:
+        return JSONResponse(
+            {
+                "error": "Neural TTS not configured",
+                "details": "Set TTS_API_KEY (or fallback LLM_API_KEY) to enable /api/tts",
+            },
+            status_code=503,
+        )
+
+    audio_format = str(body.get("format") or TTS_FORMAT).strip().lower()
+    if audio_format not in {"mp3", "wav", "opus", "aac", "flac", "pcm"}:
+        audio_format = TTS_FORMAT if TTS_FORMAT in {"mp3", "wav", "opus", "aac", "flac", "pcm"} else "mp3"
+
+    voice = str(body.get("voice") or TTS_VOICE).strip() or TTS_VOICE
+    model = str(body.get("model") or TTS_MODEL).strip() or TTS_MODEL
+
+    try:
+        speed = float(body.get("speed", 1.0))
+    except Exception:
+        speed = 1.0
+    speed = max(0.25, min(4.0, speed))
+
+    language = str(body.get("language") or "").strip()
+    instructions = ""
+    if language:
+        instructions = f"Speak naturally with clear pronunciation in {language}."
+
+    speech_url = f"{TTS_BASE_URL}/audio/speech"
+    payload: Dict[str, Any] = {
+        "model": model,
+        "voice": voice,
+        "input": text,
+        "response_format": audio_format,
+        "speed": speed,
+    }
+    if instructions:
+        payload["instructions"] = instructions
+
+    try:
+        async with httpx.AsyncClient(timeout=TTS_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                speech_url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+
+        if response.status_code == 401:
+            return JSONResponse(
+                {"error": "Invalid TTS API key", "details": "Check TTS_API_KEY / LLM_API_KEY"},
+                status_code=401,
+            )
+
+        if response.status_code == 429:
+            return JSONResponse(
+                {"error": "TTS rate limit exceeded", "details": "Please try again shortly"},
+                status_code=429,
+            )
+
+        if response.status_code != 200:
+            details = response.text[:240] if response.text else f"HTTP {response.status_code}"
+            logger.error(f"Neural TTS failed: {response.status_code} - {details}")
+            return JSONResponse(
+                {"error": "Neural TTS failed", "details": f"Service returned {response.status_code}"},
+                status_code=502,
+            )
+
+        audio_bytes = response.content
+        if not audio_bytes:
+            return JSONResponse(
+                {"error": "Neural TTS returned empty audio"},
+                status_code=502,
+            )
+
+        media_types = {
+            "mp3": "audio/mpeg",
+            "wav": "audio/wav",
+            "opus": "audio/ogg",
+            "aac": "audio/aac",
+            "flac": "audio/flac",
+            "pcm": "audio/L16",
+        }
+        media_type = media_types.get(audio_format, "audio/mpeg")
+
+        return Response(
+            content=audio_bytes,
+            media_type=media_type,
+            headers={
+                "Cache-Control": "no-store",
+                "X-TTS-Model": model,
+                "X-TTS-Voice": voice,
+            },
+        )
+    except httpx.TimeoutException:
+        return JSONResponse(
+            {"error": "Neural TTS timeout", "details": "TTS service took too long to respond"},
+            status_code=504,
+        )
+    except Exception as e:
+        logger.exception("Neural TTS generation failed")
+        return JSONResponse(
+            {"error": "Neural TTS failed", "details": str(e)},
             status_code=500,
         )
 

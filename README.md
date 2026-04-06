@@ -79,8 +79,8 @@ docker compose -f docker-compose.yml -f docker-compose.graph.yml --profile graph
 ### Quick Links
 - **Setup**: [QUICKSTART.md](./QUICKSTART.md) - One-page command reference
 - **Local Dev**: [DEVELOPMENT.md](./DEVELOPMENT.md) - Detailed local development setup
-- **Docker**: [DOCKER_SETUP.md](./DOCKER_SETUP.md) - Container operations & deployment
-- **VM Setup**: [VM_NEW_MACHINE_SETUP.md](./VM_NEW_MACHINE_SETUP.md) - Cloud VM deployment
+- **Deployment (Canonical)**: [docs/CLOUD_DEPLOYMENT.md](./docs/CLOUD_DEPLOYMENT.md) - Docker/VM/new-machine deployment flow
+- **Legacy wrappers**: [DOCKER_SETUP.md](./DOCKER_SETUP.md), [VM_NEW_MACHINE_SETUP.md](./VM_NEW_MACHINE_SETUP.md)
 - **Features**: [EMBEDDINGS.md](./EMBEDDINGS.md), [CACHING.md](./CACHING.md), [MEMORY_ARCHITECTURE.md](./MEMORY_ARCHITECTURE.md)
 - **Mobile**: [MOBILE_APP.md](./MOBILE_APP.md) - React Native guide
 - **Roadmap**: [ROADMAP.md](./ROADMAP.md) - Future enhancements

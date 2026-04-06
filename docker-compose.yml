@@ -74,6 +74,13 @@ services:
       # Transcription (for voice input in browsers without Web Speech API)
       TRANSCRIBE_API_KEY: ${TRANSCRIBE_API_KEY:-}
       TRANSCRIBE_MODEL: ${TRANSCRIBE_MODEL:-google/gemini-2.5-flash}
+      # Neural TTS (optional, for server-generated human-like voice output)
+      TTS_API_KEY: ${TTS_API_KEY:-}
+      TTS_BASE_URL: ${TTS_BASE_URL:-https://api.openai.com/v1}
+      TTS_MODEL: ${TTS_MODEL:-gpt-4o-mini-tts}
+      TTS_VOICE: ${TTS_VOICE:-alloy}
+      TTS_FORMAT: ${TTS_FORMAT:-mp3}
+      TTS_TIMEOUT_SECONDS: ${TTS_TIMEOUT_SECONDS:-90}
       # LiveKit (for real-time voice features)
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}

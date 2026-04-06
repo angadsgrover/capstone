@@ -46,6 +46,7 @@ export default function ChatInput({
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const lastAppliedVoiceVersionRef = useRef<number>(-1)
+
   const toggleVoiceInput = useCallback(() => {
     if (voiceListening) {
       onStopVoiceHold?.()
@@ -112,6 +113,11 @@ export default function ChatInput({
             placeholder={placeholder ?? 'Ask about aviation weather...'}
             autoFocus
             variant="outlined"
+            inputProps={{
+              style: {
+                fontSize: 16,
+              },
+            }}
           />
 
           {hasVoiceControls && (
@@ -123,6 +129,7 @@ export default function ChatInput({
                       onClick={onToggleVoiceConnection}
                       disabled={disabled || Boolean(voiceConnecting)}
                       color={voiceConnected ? 'success' : 'default'}
+                      sx={{ minWidth: 44, minHeight: 44 }}
                     >
                       <MaterialIcon icon={voiceConnected ? 'link_off' : 'link'} filled={voiceConnected} />
                     </IconButton>
@@ -136,6 +143,7 @@ export default function ChatInput({
                     <IconButton
                       disabled={disabled || Boolean(voiceConnecting)}
                       color={voiceListening ? 'secondary' : 'default'}
+                      sx={{ minWidth: 44, minHeight: 44 }}
                       onClick={(event) => {
                         event.preventDefault()
                         toggleVoiceInput()
@@ -150,7 +158,12 @@ export default function ChatInput({
               {onToggleAutoSpeak && (
                 <Tooltip title={autoSpeakEnabled ? 'Disable spoken responses' : 'Enable spoken responses'}>
                   <span>
-                    <IconButton onClick={onToggleAutoSpeak} disabled={disabled} color={autoSpeakEnabled ? 'primary' : 'default'}>
+                    <IconButton
+                      onClick={onToggleAutoSpeak}
+                      disabled={disabled}
+                      color={autoSpeakEnabled ? 'primary' : 'default'}
+                      sx={{ minWidth: 44, minHeight: 44 }}
+                    >
                       <MaterialIcon icon={autoSpeakEnabled ? 'volume_up' : 'volume_off'} filled={autoSpeakEnabled} />
                     </IconButton>
                   </span>
@@ -165,7 +178,7 @@ export default function ChatInput({
               variant="outlined"
               color="error"
               onClick={onAbort}
-              sx={{ minWidth: { xs: '100%', sm: 130 }, height: 48 }}
+              sx={{ minWidth: { xs: '100%', sm: 130 }, minHeight: 46 }}
               startIcon={<MaterialIcon icon="stop_circle" filled />}
             >
               Stop
@@ -175,7 +188,7 @@ export default function ChatInput({
               type="submit"
               variant="contained"
               disabled={disabled || !hasContent}
-              sx={{ minWidth: { xs: '100%', sm: 130 }, height: 48 }}
+              sx={{ minWidth: { xs: '100%', sm: 130 }, minHeight: 46 }}
               startIcon={disabled ? <CircularProgress size={16} color="inherit" /> : <MaterialIcon icon="send" filled={hasContent} />}
             >
               {disabled ? 'Processing' : 'Send'}
@@ -191,7 +204,16 @@ export default function ChatInput({
         spacing={1}
         sx={{ pt: 1.2, px: 0.5 }}
       >
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        <Stack
+          direction="row"
+          spacing={1}
+          flexWrap="nowrap"
+          sx={{
+            overflowX: 'auto',
+            pb: 0.25,
+            '&::-webkit-scrollbar': { height: 6 },
+          }}
+        >
           <Chip size="small" variant="outlined" label="Enter to send" />
           <Chip size="small" variant="outlined" label="Shift+Enter new line" />
           {hasVoiceControls && voiceStatusLabel && (
@@ -209,7 +231,7 @@ export default function ChatInput({
 
         <Stack direction="column" spacing={0.25} alignItems={{ xs: 'flex-start', sm: 'flex-end' }}>
           {voiceInterimTranscript && (
-            <Typography variant="caption" color="secondary.main" sx={{ maxWidth: 300 }}>
+            <Typography variant="caption" color="secondary.main" sx={{ maxWidth: { xs: '100%', sm: 300 } }}>
               Listening: {voiceInterimTranscript}
             </Typography>
           )}

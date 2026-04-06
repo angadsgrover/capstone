@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { toast } from 'sonner'
-import { alpha, Box, Button, Chip, CircularProgress, Paper, Stack, Typography, useTheme } from '@mui/material'
+import { alpha, Box, Button, Chip, CircularProgress, Paper, Stack, Typography, useMediaQuery, useTheme } from '@mui/material'
 import ReactFlow, {
   Background,
   Controls,
@@ -169,6 +169,7 @@ const TOPOLOGY_EDGES: Edge[] = [
 
 export default function UnifiedAgentView() {
   const theme = useTheme()
+  const isSmallScreen = useMediaQuery(theme.breakpoints.down('md'))
   const { messages, isLoading, loadFromStorage, setLoading, addMessage, clearMessages } = useChatStore()
   const { addLog, clearLogs } = useWorkflowStore()
 
@@ -508,9 +509,10 @@ export default function UnifiedAgentView() {
   }, [stopVoiceInput])
 
   const isIdle = !isLoading && !streamingMsg
+  const showWorkflowPanel = showWorkflow && messages.length > 0
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', p: { xs: 2, md: 3 }, gap: 1.5 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', p: { xs: 1.25, sm: 2, md: 3 }, gap: 1.25 }}>
       {messages.length > 0 && (
         <Stack direction="row" justifyContent="flex-end" spacing={1} flexWrap="wrap" useFlexGap>
           <Button
@@ -519,7 +521,7 @@ export default function UnifiedAgentView() {
             onClick={() => setShowWorkflow(!showWorkflow)}
             startIcon={<MaterialIcon icon={showWorkflow ? 'visibility_off' : 'account_tree'} />}
           >
-            {showWorkflow ? 'Hide Workflow' : 'Show Workflow'}
+            {showWorkflow ? (isSmallScreen ? 'Show Chat' : 'Hide Workflow') : 'Show Workflow'}
           </Button>
 
           <Button
@@ -535,16 +537,16 @@ export default function UnifiedAgentView() {
       )}
 
       <Stack
-        direction={{ xs: 'column', xl: showWorkflow && messages.length > 0 ? 'row' : 'column' }}
+        direction={showWorkflowPanel ? { xs: 'column', md: 'row' } : 'column'}
         spacing={1.5}
         sx={{ flex: 1, minHeight: 0 }}
       >
         <Paper
           variant="outlined"
           sx={{
-            flex: showWorkflow && messages.length > 0 ? { xs: 1, xl: 0.52 } : 1,
+            display: isSmallScreen && showWorkflowPanel ? 'none' : 'flex',
+            flex: showWorkflowPanel ? { xs: 1, md: 0.55 } : 1,
             minHeight: 0,
-            display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
             bgcolor: alpha(theme.palette.background.paper, 0.75),
@@ -556,7 +558,7 @@ export default function UnifiedAgentView() {
               flex: 1,
               minHeight: 0,
               overflowY: 'auto',
-              p: { xs: 2, sm: 2.5, md: 3 },
+              p: { xs: 1.25, sm: 2, md: 3 },
             }}
           >
             {messages.length === 0 && !streamingMsg ? (
@@ -591,7 +593,7 @@ export default function UnifiedAgentView() {
                       variant="outlined"
                       color="secondary"
                       startIcon={<MaterialIcon icon={icon} />}
-                      sx={{ flex: 1, justifyContent: 'flex-start', minWidth: { xs: '100%', md: 300 }, py: 1.2 }}
+                      sx={{ flex: 1, justifyContent: 'flex-start', minWidth: { xs: '100%', md: 260 }, py: 1.2 }}
                     >
                       {text}
                     </Button>
@@ -651,12 +653,12 @@ export default function UnifiedAgentView() {
           </Box>
         </Paper>
 
-        {showWorkflow && messages.length > 0 && (
+        {showWorkflowPanel && (
           <Paper
             variant="outlined"
             sx={{
-              flex: { xs: 1, xl: 0.48 },
-              minHeight: { xs: 340, xl: 0 },
+              flex: { xs: 1, md: 0.45 },
+              minHeight: 0,
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',

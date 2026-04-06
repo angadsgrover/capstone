@@ -43,6 +43,118 @@ interface UseLiveKitVoiceResult {
 }
 
 const LIVEKIT_ROOM_NAME = import.meta.env.VITE_LIVEKIT_ROOM_NAME ?? 'polyu-weather-voice'
+const AUTO_SPEAK_STORAGE_KEY = 'voice.autoSpeakEnabled'
+const TTS_PREFERRED_VOICE_NAME = (import.meta.env.VITE_TTS_VOICE_NAME ?? '').trim()
+const TTS_LANG = (import.meta.env.VITE_TTS_LANG ?? 'en-US').trim() || 'en-US'
+
+function parseTtsNumber(value: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.min(max, Math.max(min, parsed))
+}
+
+const TTS_RATE = parseTtsNumber(import.meta.env.VITE_TTS_RATE, 0.96, 0.6, 1.4)
+const TTS_PITCH = parseTtsNumber(import.meta.env.VITE_TTS_PITCH, 1.0, 0.5, 1.6)
+const TTS_VOLUME = parseTtsNumber(import.meta.env.VITE_TTS_VOLUME, 1.0, 0, 1)
+const NEURAL_TTS_ENABLED = import.meta.env.VITE_NEURAL_TTS_ENABLED === 'true'
+const NEURAL_TTS_PREFER = import.meta.env.VITE_NEURAL_TTS_PREFER !== 'false'
+const NEURAL_TTS_MODEL = (import.meta.env.VITE_NEURAL_TTS_MODEL ?? '').trim()
+const NEURAL_TTS_VOICE = (import.meta.env.VITE_NEURAL_TTS_VOICE ?? TTS_PREFERRED_VOICE_NAME ?? '').trim()
+const NEURAL_TTS_FORMAT = (import.meta.env.VITE_NEURAL_TTS_FORMAT ?? 'mp3').trim().toLowerCase()
+
+const TTS_VOICE_NAME_HINTS = [
+  'microsoft aria',
+  'microsoft jenny',
+  'google us english',
+  'samantha',
+  'alloy',
+]
+
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function splitTextForSpeech(text: string, maxChunkLength = 220): string[] {
+  const normalized = normalizeWhitespace(text)
+  if (!normalized) return []
+
+  const sentenceParts = normalized.match(/[^.!?]+[.!?]*/g) ?? [normalized]
+  const chunks: string[] = []
+  let current = ''
+
+  const flush = () => {
+    const value = normalizeWhitespace(current)
+    if (value) chunks.push(value)
+    current = ''
+  }
+
+  const pushPart = (part: string) => {
+    if ((current + part).length <= maxChunkLength) {
+      current += part
+      return
+    }
+
+    if (current) flush()
+
+    if (part.length <= maxChunkLength) {
+      current = part
+      return
+    }
+
+    const words = part.split(/\s+/)
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word
+      if (candidate.length > maxChunkLength && current) {
+        flush()
+      }
+      current = current ? `${current} ${word}` : word
+    }
+  }
+
+  for (const part of sentenceParts) {
+    pushPart(part)
+  }
+
+  if (current) flush()
+  return chunks
+}
+
+function pickPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
+  if (!voices.length) return null
+
+  const language = TTS_LANG.toLowerCase()
+  const languageBase = language.split('-')[0]
+  const matchesLanguage = (voice: SpeechSynthesisVoice) => {
+    const voiceLang = (voice.lang || '').toLowerCase()
+    if (!voiceLang) return false
+    return voiceLang === language || voiceLang === languageBase || voiceLang.startsWith(`${languageBase}-`)
+  }
+
+  if (TTS_PREFERRED_VOICE_NAME) {
+    const preferred = TTS_PREFERRED_VOICE_NAME.toLowerCase()
+    const exact = voices.find((voice) => voice.name.toLowerCase() === preferred)
+    if (exact) return exact
+    const contains = voices.find((voice) => voice.name.toLowerCase().includes(preferred))
+    if (contains) return contains
+  }
+
+  for (const hint of TTS_VOICE_NAME_HINTS) {
+    const hintMatch = voices.find((voice) => {
+      const lowerName = voice.name.toLowerCase()
+      return lowerName.includes(hint) && matchesLanguage(voice)
+    })
+    if (hintMatch) return hintMatch
+  }
+
+  const sameLanguageDefault = voices.find((voice) => matchesLanguage(voice) && voice.default)
+  if (sameLanguageDefault) return sameLanguageDefault
+
+  const sameLanguage = voices.find((voice) => matchesLanguage(voice))
+  if (sameLanguage) return sameLanguage
+
+  const anyDefault = voices.find((voice) => voice.default)
+  return anyDefault ?? voices[0] ?? null
+}
 
 function speechRecognitionCtor(): SpeechRecognitionCtor | null {
   if (typeof window === 'undefined') return null
@@ -112,7 +224,15 @@ export function useLiveKitVoice({ onTranscriptFinal }: VoiceOptions): UseLiveKit
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [isListening, setIsListening] = useState(false)
-  const [autoSpeakEnabled, setAutoSpeakEnabled] = useState(import.meta.env.VITE_LIVEKIT_AUTO_SPEAK !== 'false')
+  const [autoSpeakEnabled, setAutoSpeakEnabled] = useState(() => {
+    const defaultValue = import.meta.env.VITE_LIVEKIT_AUTO_SPEAK !== 'false'
+    if (typeof window === 'undefined') return defaultValue
+
+    const saved = window.localStorage.getItem(AUTO_SPEAK_STORAGE_KEY)
+    if (saved === 'true') return true
+    if (saved === 'false') return false
+    return defaultValue
+  })
   const [micPermission, setMicPermission] = useState<MicPermission>('unknown')
   const [interimTranscript, setInterimTranscript] = useState('')
   const [statusLabel, setStatusLabel] = useState('Voice offline')
@@ -125,6 +245,16 @@ export function useLiveKitVoice({ onTranscriptFinal }: VoiceOptions): UseLiveKit
   const restartAttemptsRef = useRef(0)
   const networkErrorCountRef = useRef(0)
   const livekitMicSuspendedForInputRef = useRef(false)
+  const speechVoicesRef = useRef<SpeechSynthesisVoice[]>([])
+  const selectedSpeechVoiceRef = useRef<SpeechSynthesisVoice | null>(null)
+  const speechQueueRef = useRef<string[]>([])
+  const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
+  const speechGenerationRef = useRef(0)
+  const lastSpokenTextRef = useRef('')
+  const lastSpokenAtRef = useRef(0)
+  const neuralAudioRef = useRef<HTMLAudioElement | null>(null)
+  const neuralAudioUrlRef = useRef<string | null>(null)
+  const neuralAbortRef = useRef<AbortController | null>(null)
   
   // MediaRecorder fallback refs for browsers without Web Speech API
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -660,23 +790,180 @@ export function useLiveKitVoice({ onTranscriptFinal }: VoiceOptions): UseLiveKit
     suspendLiveKitMicForInput,
   ])
 
-  const stopSpeaking = useCallback(() => {
+  const refreshSpeechVoices = useCallback(() => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return
-    window.speechSynthesis.cancel()
+    const voices = window.speechSynthesis.getVoices()
+    speechVoicesRef.current = voices
+    selectedSpeechVoiceRef.current = pickPreferredVoice(voices)
   }, [])
+
+  const cleanupNeuralAudio = useCallback(() => {
+    const audio = neuralAudioRef.current
+    if (audio) {
+      try {
+        audio.pause()
+        audio.currentTime = 0
+        audio.removeAttribute('src')
+        audio.load()
+      } catch {
+        // Ignore audio element cleanup errors.
+      }
+    }
+
+    if (neuralAudioUrlRef.current) {
+      URL.revokeObjectURL(neuralAudioUrlRef.current)
+      neuralAudioUrlRef.current = null
+    }
+  }, [])
+
+  const speakWithNeuralTts = useCallback(async (text: string, generation: number): Promise<boolean> => {
+    if (!NEURAL_TTS_ENABLED) return false
+
+    const controller = new AbortController()
+    neuralAbortRef.current = controller
+
+    try {
+      const audioBlob = await livekitService.synthesizeSpeech(
+        {
+          text,
+          language: TTS_LANG,
+          format: NEURAL_TTS_FORMAT as 'mp3' | 'wav' | 'opus' | 'aac' | 'flac' | 'pcm',
+          speed: TTS_RATE,
+          model: NEURAL_TTS_MODEL || undefined,
+          voice: NEURAL_TTS_VOICE || undefined,
+        },
+        controller.signal,
+      )
+
+      if (generation !== speechGenerationRef.current) return false
+
+      cleanupNeuralAudio()
+
+      const audioUrl = URL.createObjectURL(audioBlob)
+      neuralAudioUrlRef.current = audioUrl
+
+      const audio = neuralAudioRef.current ?? new Audio()
+      audio.preload = 'auto'
+      audio.setAttribute('playsinline', 'true')
+      audio.src = audioUrl
+      neuralAudioRef.current = audio
+
+      audio.onended = () => {
+        if (generation !== speechGenerationRef.current) return
+        cleanupNeuralAudio()
+      }
+
+      audio.onerror = () => {
+        if (generation !== speechGenerationRef.current) return
+        cleanupNeuralAudio()
+      }
+
+      await audio.play()
+      return true
+    } catch {
+      cleanupNeuralAudio()
+      return false
+    } finally {
+      if (neuralAbortRef.current === controller) {
+        neuralAbortRef.current = null
+      }
+    }
+  }, [cleanupNeuralAudio])
+
+  const speakQueuedChunks = useCallback((generation: number) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return
+    if (generation !== speechGenerationRef.current) return
+
+    const nextChunk = speechQueueRef.current.shift()
+    if (!nextChunk) {
+      activeUtteranceRef.current = null
+      return
+    }
+
+    const utterance = new SpeechSynthesisUtterance(nextChunk)
+    const voice = selectedSpeechVoiceRef.current ?? pickPreferredVoice(speechVoicesRef.current)
+
+    if (voice) {
+      utterance.voice = voice
+      utterance.lang = voice.lang || TTS_LANG
+    } else {
+      utterance.lang = TTS_LANG
+    }
+
+    utterance.rate = TTS_RATE
+    utterance.pitch = TTS_PITCH
+    utterance.volume = TTS_VOLUME
+
+    utterance.onend = () => {
+      if (generation !== speechGenerationRef.current) return
+      if (activeUtteranceRef.current === utterance) {
+        activeUtteranceRef.current = null
+      }
+      speakQueuedChunks(generation)
+    }
+
+    utterance.onerror = () => {
+      if (generation !== speechGenerationRef.current) return
+      if (activeUtteranceRef.current === utterance) {
+        activeUtteranceRef.current = null
+      }
+      speakQueuedChunks(generation)
+    }
+
+    activeUtteranceRef.current = utterance
+    window.speechSynthesis.speak(utterance)
+  }, [])
+
+  const stopSpeaking = useCallback(() => {
+    speechGenerationRef.current += 1
+    speechQueueRef.current = []
+    activeUtteranceRef.current = null
+    neuralAbortRef.current?.abort()
+    neuralAbortRef.current = null
+    cleanupNeuralAudio()
+
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+    }
+  }, [cleanupNeuralAudio])
 
   const speakText = useCallback((text: string) => {
     if (!autoSpeakEnabled) return
-    if (typeof window === 'undefined' || !window.speechSynthesis) return
 
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate = 1
-    utterance.pitch = 1
-    utterance.volume = 1
+    const browserTtsAvailable = typeof window !== 'undefined' && !!window.speechSynthesis
+    if (!browserTtsAvailable && !NEURAL_TTS_ENABLED) return
 
-    window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(utterance)
-  }, [autoSpeakEnabled])
+    const normalized = normalizeWhitespace(text)
+    if (!normalized) return
+
+    const now = Date.now()
+    if (normalized === lastSpokenTextRef.current && now - lastSpokenAtRef.current < 2500) {
+      return
+    }
+    lastSpokenTextRef.current = normalized
+    lastSpokenAtRef.current = now
+
+    void (async () => {
+      stopSpeaking()
+      const generation = speechGenerationRef.current
+      const preferNeural = NEURAL_TTS_PREFER || !browserTtsAvailable
+
+      if (preferNeural) {
+        const spokenViaNeural = await speakWithNeuralTts(normalized, generation)
+        if (spokenViaNeural) return
+      }
+
+      if (!browserTtsAvailable || generation !== speechGenerationRef.current) return
+
+      refreshSpeechVoices()
+
+      const chunks = splitTextForSpeech(normalized)
+      if (!chunks.length) return
+
+      speechQueueRef.current = chunks
+      speakQueuedChunks(generation)
+    })()
+  }, [autoSpeakEnabled, refreshSpeechVoices, speakQueuedChunks, speakWithNeuralTts, stopSpeaking])
 
   const toggleAutoSpeak = useCallback(() => {
     setAutoSpeakEnabled((current) => {
@@ -686,6 +973,43 @@ export function useLiveKitVoice({ onTranscriptFinal }: VoiceOptions): UseLiveKit
       return !current
     })
   }, [stopSpeaking])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return
+
+    const synth = window.speechSynthesis
+    const handleVoicesChanged = () => {
+      refreshSpeechVoices()
+    }
+
+    refreshSpeechVoices()
+    const refreshTimer = window.setTimeout(() => {
+      refreshSpeechVoices()
+    }, 250)
+
+    if (typeof synth.addEventListener === 'function') {
+      synth.addEventListener('voiceschanged', handleVoicesChanged)
+      return () => {
+        window.clearTimeout(refreshTimer)
+        synth.removeEventListener('voiceschanged', handleVoicesChanged)
+      }
+    }
+
+    const previousHandler = synth.onvoiceschanged
+    synth.onvoiceschanged = handleVoicesChanged
+
+    return () => {
+      window.clearTimeout(refreshTimer)
+      if (synth.onvoiceschanged === handleVoicesChanged) {
+        synth.onvoiceschanged = previousHandler
+      }
+    }
+  }, [refreshSpeechVoices])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(AUTO_SPEAK_STORAGE_KEY, String(autoSpeakEnabled))
+  }, [autoSpeakEnabled])
 
   useEffect(() => {
     return () => {

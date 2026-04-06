@@ -128,6 +128,11 @@ psql -U capstone
 SELECT * FROM conversations LIMIT 5;
 
 # View embeddings
+SELECT COUNT(*) FROM embeddings;
+
+# Check METAR history
+SELECT COUNT(*) FROM metar_history;
+```
 
 ---
 
@@ -158,11 +163,6 @@ Notes:
 - Script keeps state in `/Volumes/Angad-SSD/hko-data/August_2025/.sync_state.json` so reruns only process new files.
 - `ADS_B` downloads are supported, but embedding ingestion currently focuses on METAR/TAF/SPECI XML gzip files.
 - Tune `--ingest-limit` to control embedding cost/time.
-SELECT COUNT(*) FROM embeddings;
-
-# Check METAR history
-SELECT COUNT(*) FROM metar_history;
-```
 
 ---
 
@@ -228,5 +228,5 @@ cd agent && python -m pytest tools/ -v
 For detailed guides, see:
 - **Setup**: [README.md](./README.md)
 - **Development**: [DEVELOPMENT.md](./DEVELOPMENT.md)
-- **Docker + Storage Migration**: [DOCKER_SETUP.md](./DOCKER_SETUP.md)
-- **VM / New Machine Deployment**: [VM_NEW_MACHINE_SETUP.md](./VM_NEW_MACHINE_SETUP.md)
+- **Deployment (Canonical)**: [docs/CLOUD_DEPLOYMENT.md](./docs/CLOUD_DEPLOYMENT.md)
+- **Legacy wrappers**: [DOCKER_SETUP.md](./DOCKER_SETUP.md), [VM_NEW_MACHINE_SETUP.md](./VM_NEW_MACHINE_SETUP.md)

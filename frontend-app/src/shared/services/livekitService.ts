@@ -3,6 +3,7 @@ const API_BASE = import.meta.env.VITE_AGENT_API_URL
 
 const LIVEKIT_TOKEN_ENDPOINT = import.meta.env.VITE_LIVEKIT_TOKEN_ENDPOINT ?? '/api/livekit/token'
 const TRANSCRIBE_ENDPOINT = '/api/transcribe'
+const TTS_ENDPOINT = '/api/tts'
 
 export interface LiveKitTokenRequest {
   room_name?: string
@@ -29,6 +30,15 @@ export interface TranscribeRequest {
 export interface TranscribeResponse {
   text: string
   language: string
+}
+
+export interface NeuralTtsRequest {
+  text: string
+  voice?: string
+  language?: string
+  format?: 'mp3' | 'wav' | 'opus' | 'aac' | 'flac' | 'pcm'
+  speed?: number
+  model?: string
 }
 
 function resolveTokenUrl(): string {
@@ -89,7 +99,31 @@ async function transcribeAudio(payload: TranscribeRequest): Promise<TranscribeRe
   return { text, language }
 }
 
+async function synthesizeSpeech(payload: NeuralTtsRequest, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(`${API_BASE}${TTS_ENDPOINT}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  })
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as Record<string, unknown>
+    const details = typeof data.details === 'string'
+      ? data.details
+      : (typeof data.error === 'string' ? data.error : response.statusText)
+    throw new Error(`Neural TTS error: ${details || 'request failed'}`)
+  }
+
+  const audioBlob = await response.blob()
+  if (!audioBlob.size) {
+    throw new Error('Neural TTS returned empty audio')
+  }
+  return audioBlob
+}
+
 export const livekitService = {
   fetchLiveKitToken,
   transcribeAudio,
+  synthesizeSpeech,
 }

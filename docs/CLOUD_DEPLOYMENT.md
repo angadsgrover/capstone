@@ -1,339 +1,373 @@
-# Cloud Deployment Guide
+# Cloud Deployment Guide (Canonical)
 
-Complete guide for deploying to Azure VM, DigitalOcean, or any Linux VM.
+This is the single source of truth for Docker/Podman deployment on cloud VMs and new machines.
+
+Legacy wrapper docs:
+- [DOCKER_SETUP.md](../DOCKER_SETUP.md)
+- [VM_NEW_MACHINE_SETUP.md](../VM_NEW_MACHINE_SETUP.md)
 
 ---
 
 ## Quick Start (TL;DR)
 
 ```bash
-# On your VM (Ubuntu 22.04/24.04)
+# Ubuntu 22.04/24.04
+sudo apt-get update && sudo apt-get install -y ca-certificates curl gnupg git
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER && newgrp docker
-# OR install Podman: sudo apt-get install -y podman podman-compose
 
-git clone <your-repo>
+# Project setup
+git clone <your-repo-url>
 cd capstone
 cp .env.example .env
-# Edit .env with your API keys
+# Edit .env: LLM_API_KEY, BASE_URL, MODEL_CHOICE, POSTGRES_PASSWORD
 
-# Development (HTTP only)
+# Start core stack
 docker compose up -d
 
-# Production (HTTPS with auto-cert)
-echo "DOMAIN=your-domain.com" >> .env
+# Optional HTTPS with Caddy overlay (set DOMAIN in .env first)
 docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
 ```
 
 ---
 
-### Podman-compatible commands
+## 1. Scope and Runtime
 
-All compose workflows in this repo work with either engine:
+Supported runtimes:
+- Docker Compose v2 (`docker compose`)
+- Podman Compose (`podman compose`)
 
-```bash
-# Docker
-docker compose up -d
-
-# Podman
-podman compose up -d
-```
-
-`start.py --docker` already auto-detects Docker/Podman. Makefile targets also auto-detect and use the available engine.
+If you use Podman, replace `docker compose` with `podman compose` in examples below.
 
 ---
 
-## 1. Platform Comparison
+## 2. Recommended VM Specs
 
-| Feature | Azure VM | DigitalOcean Droplet | 
-|---------|----------|---------------------|
-| **Min Cost** | ~$15/mo (B2s) | $12/mo (Basic 2GB) |
-| **Recommended** | Standard_D2s_v3 ($70/mo) | Premium Intel 4GB ($24/mo) |
-| **Secret Management** | Azure Key Vault | DO Encrypted Secrets |
-| **Managed DB Option** | Azure PostgreSQL Flexible | DO Managed PostgreSQL |
-| **Networking** | NSG (complex) | Firewall (simple) |
-| **Best For** | Enterprise/AD integration | Simplicity/cost |
+| Workload | vCPU | RAM | Storage |
+| --- | --- | --- | --- |
+| Dev or demo | 2 | 4 GB | 50 GB SSD |
+| Production | 4 | 8 GB | 100 GB SSD |
+| High traffic | 8 | 16 GB | 200 GB SSD |
 
-### Recommended VM Specs
-
-| Workload | vCPUs | RAM | Storage |
-|----------|-------|-----|---------|
-| Dev/Demo | 2 | 4GB | 50GB SSD |
-| Production | 4 | 8GB | 100GB SSD |
-| High Traffic | 8 | 16GB | 200GB SSD |
+OS recommendations:
+- Ubuntu 22.04/24.04 LTS for cloud VMs
+- macOS or Linux for local machines
 
 ---
 
-## 2. Initial VM Setup
+## 3. Host Setup (Ubuntu)
 
-### 2.1 Install Docker (Ubuntu)
+### 3.1 Install container engine
 
 ```bash
-# Update and install prerequisites
 sudo apt-get update
 sudo apt-get install -y ca-certificates curl gnupg git
 
-# Add Docker GPG key and repository
 sudo install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-# Install Docker
 sudo apt-get update
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-# Run Docker without sudo
 sudo usermod -aG docker $USER
 newgrp docker
 
-# Verify
 docker --version
 docker compose version
 ```
 
-### 2.2 Configure Firewall
+### 3.2 Baseline firewall
 
 ```bash
-# Ubuntu UFW
-sudo ufw allow 22/tcp   # SSH
-sudo ufw allow 80/tcp   # HTTP
-sudo ufw allow 443/tcp  # HTTPS
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
 sudo ufw enable
-
-# Azure: Also configure Network Security Group (NSG)
-# DigitalOcean: Also configure Cloud Firewall
 ```
+
+Also configure your cloud firewall/security group accordingly.
 
 ---
 
-## 3. Deployment Options
-
-### Option A: Direct Docker Compose (Recommended for simplicity)
-
-**Pros**: Full control, no extra overhead, easy debugging
-**Cons**: Manual SSL setup, no GUI
+## 4. Project Configuration
 
 ```bash
-# Clone and configure
-git clone <your-repo>
+git clone <your-repo-url>
 cd capstone
 cp .env.example .env
-nano .env  # Set your secrets
+```
 
-# Start (development, HTTP only)
+Minimum required `.env` values:
+
+```bash
+LLM_API_KEY=sk-...
+BASE_URL=https://openrouter.ai/api/v1
+MODEL_CHOICE=qwen/qwen3-8b
+POSTGRES_PASSWORD=change_to_a_strong_password
+```
+
+Common optional values:
+
+```bash
+# Auth and CORS hardening
+CORS_ALLOW_ORIGINS=https://your-frontend.example.com
+REQUIRE_AUTH_SUBJECT=true
+AUTH_VERIFICATION_MODE=jwt
+JWT_JWKS_URL=https://your-idp.example.com/.well-known/jwks.json
+JWT_ISSUER=https://your-idp.example.com/
+JWT_AUDIENCE=capstone-agent-api
+
+# Request guards
+MAX_REQUEST_BYTES=1048576
+MAX_INPUT_CHARS=12000
+
+# Optional graph profile
+NEO4J_PASSWORD=change_to_a_strong_neo4j_password
+
+# Optional memory/tracing
+MEM0_LONG_TERM_ENABLED=true
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=ls-...
+```
+
+---
+
+## 5. Compose Profiles and Start Commands
+
+### 5.1 Core stack (default)
+
+```bash
 docker compose up -d
+```
 
-# Start (production, with HTTPS)
-# First, set DOMAIN in .env
+### 5.2 Development extras (Adminer)
+
+```bash
+docker compose --profile dev up -d
+```
+
+### 5.3 HTTPS overlay with Caddy
+
+```bash
+# Set DOMAIN in .env first
 docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+```
 
-# View logs
-docker compose logs -f
+### 5.4 AGE + Neo4j graph profile
 
-# Update deployment
-git pull
-docker compose build
+```bash
+# First build AGE-enabled postgres image
+docker compose -f docker-compose.yml -f docker-compose.graph.yml build postgres
+
+# Start with graph overlay
+docker compose -f docker-compose.yml -f docker-compose.graph.yml --profile graph up -d
+```
+
+---
+
+## 6. Verify Deployment
+
+```bash
+docker compose ps
+docker compose logs --tail=200 agent
+```
+
+Expected URLs:
+- Frontend: `http://localhost:80`
+- API docs: `http://localhost:8000/docs`
+- Adminer (dev profile): `http://localhost:8080`
+- Neo4j Browser (graph profile): `http://localhost:7474`
+
+---
+
+## 7. Data Placement and Storage Migration
+
+### Option A (macOS easiest): move Docker Desktop disk image
+
+Use Docker Desktop settings to move the disk image to external storage.
+
+Pros:
+- zero compose changes
+- applies to all containers
+
+Cons:
+- moves all Docker workloads
+
+### Option B (per-project): storage override file
+
+Create host directories:
+
+```bash
+mkdir -p /data/capstone/postgres /data/capstone/redis /data/capstone/neo4j
+```
+
+Create `docker-compose.storage.yml`:
+
+```yaml
+services:
+  postgres:
+    volumes:
+      - ${DATA_ROOT}/postgres:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  redis:
+    volumes:
+      - ${DATA_ROOT}/redis:/data
+
+  neo4j:
+    volumes:
+      - ${DATA_ROOT}/neo4j:/data
+```
+
+Set `.env`:
+
+```bash
+DATA_ROOT=/data/capstone
+```
+
+Start with override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.storage.yml up -d
+```
+
+### One-time migration from named volumes
+
+```bash
+docker compose down
+
+docker run --rm -v capstone_pgdata:/from -v /data/capstone/postgres:/to alpine sh -c "cd /from && cp -av . /to"
+docker run --rm -v capstone_redisdata:/from -v /data/capstone/redis:/to alpine sh -c "cd /from && cp -av . /to"
+docker run --rm -v capstone_neo4jdata:/from -v /data/capstone/neo4j:/to alpine sh -c "cd /from && cp -av . /to"
+
+docker compose -f docker-compose.yml -f docker-compose.storage.yml up -d
+```
+
+---
+
+## 8. Backup and Restore
+
+### Backup PostgreSQL volume
+
+```bash
+mkdir -p backups
+
+docker run --rm \
+  -v capstone_pgdata:/source \
+  -v "$PWD/backups:/backup" \
+  alpine sh -c "cd /source && tar czf /backup/pgdata_$(date +%F).tar.gz ."
+```
+
+Optional Redis backup:
+
+```bash
+docker run --rm \
+  -v capstone_redisdata:/source \
+  -v "$PWD/backups:/backup" \
+  alpine sh -c "cd /source && tar czf /backup/redisdata_$(date +%F).tar.gz ."
+```
+
+### Restore PostgreSQL volume
+
+```bash
+docker compose down
+
+docker run --rm \
+  -v capstone_pgdata:/target \
+  -v "$PWD/backups:/backup" \
+  alpine sh -c "cd /target && rm -rf ./* && tar xzf /backup/pgdata_YYYY-MM-DD.tar.gz -C /target"
+
 docker compose up -d
 ```
 
-### Option B: Dokploy (Recommended for GUI management)
-
-[Dokploy](https://dokploy.com) is a free, open-source Vercel/Netlify alternative.
-
-**Pros**: Nice GUI, auto-SSL, webhooks, multiple projects
-**Cons**: Extra resource usage (~300MB RAM)
-
-```bash
-# Install Dokploy (one-liner)
-curl -sSL https://dokploy.com/install.sh | sh
-
-# Access at http://your-ip:3000
-# Create project, add your repo, configure env vars in UI
-```
-
-### Option C: Coolify
-
-Similar to Dokploy but more feature-rich (and heavier).
-
-```bash
-curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
-# Access at http://your-ip:8000
-```
-
-### Comparison
-
-| Feature | Direct Docker | Dokploy | Coolify |
-|---------|---------------|---------|---------|
-| Resource Usage | Minimal | ~300MB | ~500MB |
-| Setup Time | 5 min | 10 min | 15 min |
-| Auto SSL | Via Caddy overlay | ✅ Built-in | ✅ Built-in |
-| GUI Dashboard | ❌ | ✅ | ✅ |
-| Git Webhooks | Manual | ✅ | ✅ |
-| Learning Curve | Low | Low | Medium |
-| **Recommendation** | Small teams | Most users | Power users |
-
 ---
 
-## 4. Secret Management
+## 9. New Machine Migration Playbook
 
-### Level 1: `.env` File (Development/Small Deployments)
+1. On old machine, create database backups.
+2. Transfer backups to new machine.
+3. On new machine, run Sections 3-5 once.
+4. Stop stack, restore backups, restart stack.
+5. Validate health endpoints.
 
-```bash
-# Create .env from template
-cp .env.example .env
-chmod 600 .env  # Restrict permissions
-
-# Never commit .env to git (already in .gitignore)
-```
-
-### Level 2: Cloud Provider Secrets
-
-**Azure Key Vault:**
-```bash
-# Create Key Vault
-az keyvault create --name aviation-kv --resource-group aviation-rg
-
-# Store secrets
-az keyvault secret set --vault-name aviation-kv --name LLM-API-KEY --value "sk-..."
-
-# Retrieve in deployment script
-export LLM_API_KEY=$(az keyvault secret show --vault-name aviation-kv --name LLM-API-KEY --query value -o tsv)
-```
-
-**DigitalOcean Encrypted Environment:**
-```bash
-# In App Platform or via doctl
-doctl apps create-deployment <app-id> --env LLM_API_KEY=sk-...
-```
-
-### Level 3: HashiCorp Vault (Enterprise)
+Validation:
 
 ```bash
-# Install Vault
-# ...
-# Store secrets
-vault kv put secret/aviation LLM_API_KEY="sk-..." POSTGRES_PASSWORD="..."
-
-# Retrieve
-export LLM_API_KEY=$(vault kv get -field=LLM_API_KEY secret/aviation)
-```
-
-### Level 4: SOPS with age (GitOps-friendly)
-
-```bash
-# Install age and sops
-brew install age sops  # or apt-get
-
-# Generate key
-age-keygen -o ~/.config/sops/age/keys.txt
-
-# Encrypt .env
-sops --encrypt --age $(cat ~/.config/sops/age/keys.txt | grep public | cut -d: -f2) .env > .env.enc
-
-# Decrypt on server
-sops --decrypt .env.enc > .env
+docker compose ps
+curl -s http://localhost:8000/docs > /dev/null && echo "API OK"
+curl -s http://localhost:80 > /dev/null && echo "Frontend OK"
 ```
 
 ---
 
-## 5. Production Checklist
-
-### Security
-- [ ] Strong, unique passwords (POSTGRES_PASSWORD, NEO4J_PASSWORD)
-- [ ] `.env` has `chmod 600` and is in `.gitignore`
-- [ ] SSH restricted to specific IPs
-- [ ] Only ports 80, 443, 22 exposed
-- [ ] Auto security updates enabled
-
-### Performance
-- [ ] Using production compose overlay (`docker-compose.prod.yml`)
-- [ ] Resource limits configured
-- [ ] Log rotation enabled (json-file driver with max-size)
-
-### Reliability
-- [ ] Container restart policies (`restart: unless-stopped` or `always`)
-- [ ] Health checks configured
-- [ ] Automated backups for PostgreSQL volume
-
-### Monitoring
-- [ ] LangSmith tracing enabled
-- [ ] Container logs accessible
-- [ ] Disk space monitoring
-
----
-
-## 6. Quick Commands Reference
+## 10. Day-2 Operations
 
 ```bash
-# Start production stack
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Start / stop
+docker compose up -d
+docker compose down
 
-# Start with HTTPS
-docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
-
-# Start full stack (all options)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.caddy.yml up -d
-
-# View all logs
-docker compose logs -f
-
-# View specific service
+# Logs
 docker compose logs -f agent
+docker compose logs -f frontend
+docker compose logs -f postgres
 
-# Check health
-docker compose ps
-curl -s http://localhost/api/health | jq
-
-# Restart single service
-docker compose restart agent
-
-# Update and redeploy
+# Rebuild/redeploy
 git pull
 docker compose build
 docker compose up -d
 
-# Backup PostgreSQL
-docker run --rm -v capstone_pgdata:/src -v $(pwd)/backups:/dest alpine tar czf /dest/pgdata-$(date +%F).tar.gz -C /src .
-
-# Clean up old images
-docker system prune -af
+# Restart one service
+docker compose restart agent
 ```
 
 ---
 
-## 7. Troubleshooting
+## 11. Production Hardening Checklist
 
-### Container won't start
+- Use strong unique secrets (`POSTGRES_PASSWORD`, `NEO4J_PASSWORD`, API keys)
+- Keep `.env` private (`chmod 600 .env`)
+- Restrict SSH source IPs
+- Expose only ports 22, 80, 443 publicly
+- Keep DB/Redis/internal MCP ports private
+- Enable automatic OS security updates
+- Monitor disk usage and container restart loops
+
+---
+
+## 12. Troubleshooting
+
+### Stack starts but service is unreachable
+
+1. Check cloud firewall/security group.
+2. Check UFW status (`sudo ufw status`).
+3. Confirm containers are healthy (`docker compose ps`).
+
+### Containers restart repeatedly
+
 ```bash
-docker compose logs <service-name>
 docker compose ps
+docker compose logs --tail=200 agent
+docker compose logs --tail=200 postgres
 ```
 
-### Can't reach from internet
-1. Check cloud firewall/security group
-2. Check VM firewall: `sudo ufw status`
-3. Verify service is running: `docker compose ps`
+### Disk pressure
 
-### SSL certificate issues (Caddy)
-1. Verify domain DNS points to server IP
-2. Check Caddy logs: `docker compose logs caddy`
-3. Ensure ports 80 and 443 are open
-
-### Out of disk space
 ```bash
 df -h
 docker system df
-docker system prune -af  # Remove unused images
+docker system prune -af
 ```
+
+### Caddy HTTPS issues
+
+1. Verify DNS points to VM public IP.
+2. Check caddy logs (`docker compose logs caddy`).
+3. Ensure ports 80 and 443 are open.
 
 ---
 
-## 8. Cost Optimization Tips
-
-1. **Start small**: 2 vCPU / 4GB RAM is enough for dev/demo
-2. **Reserved instances**: Save 30-60% on Azure/DigitalOcean
-3. **Managed PostgreSQL**: Consider only for production (adds $15-30/mo)
-4. **Spot/Preemptible**: Not recommended for this stack (stateful)
-5. **CDN**: Add Cloudflare (free tier) for static assets
+Last updated: 2026-04-04
