@@ -7,7 +7,7 @@ Architecture:
       ▼
   router  ──classifies intent──►  aviation_weather │ hk_weather │ aircraft │ general │ planning
                                        │
-                                  create_react_agent (ReAct loop with focused tools)
+                                  create_agent (ReAct loop with focused tools)
                                        │
                                       END
 
@@ -38,7 +38,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import create_react_agent
+from langgraph.prebuilt import create_agent
 
 try:
     from langsmith import traceable
@@ -438,22 +438,22 @@ def _build_graph(
             return tools
         return tools
 
-    # ── Specialist sub-graphs (create_react_agent) ─────────────────────────────
+    # ── Specialist sub-graphs (create_agent) ─────────────────────────────
     # Prompts are injected per-request in _make_specialist_node so that
     # long-term memory context can be prepended before each inference.
-    aviation_agent = create_react_agent(
+    aviation_agent = create_agent(
         llm,
         tools=_maybe_wrap_with_healing(aviation_tools + [lookup_airport_codes] + _extra_tools()),
     )
-    hk_agent = create_react_agent(
+    hk_agent = create_agent(
         llm,
         tools=_maybe_wrap_with_healing(hk_tools + _extra_tools()),
     )
-    aircraft_agent = create_react_agent(
+    aircraft_agent = create_agent(
         llm,
         tools=_maybe_wrap_with_healing(adsb_tools + [lookup_airport_codes] + _extra_tools()),
     )
-    general_agent = create_react_agent(
+    general_agent = create_agent(
         llm,
         tools=_maybe_wrap_with_healing(aviation_tools + hk_tools + adsb_tools + [lookup_airport_codes] + _extra_tools()),
     )
