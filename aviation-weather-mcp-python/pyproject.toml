@@ -13,11 +13,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dependencies = [
-    "fastmcp>=2.10.2",
-    "aiohttp>=3.8.0",
-    "pytest>=8.2.0",
-]
+dependencies = ["fastmcp>=2.10.2", "aiohttp>=3.8.0", "pytest>=8.2.0"]
 
 [project.scripts]
 aviation-weather-mcp = "aviation_weather_mcp_server.__main__:main"
@@ -25,6 +21,3 @@ aviation-weather-mcp = "aviation_weather_mcp_server.__main__:main"
 [tool.setuptools]
 packages = ["aviation_weather_mcp_server"]
 include-package-data = true
-
-[project.urls]
-repository = "https://github.com/hkopenai/hk-climate-mcp-server"
