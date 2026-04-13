@@ -38,7 +38,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import create_agent
+from langchain.agents import create_agent
 
 try:
     from langsmith import traceable
